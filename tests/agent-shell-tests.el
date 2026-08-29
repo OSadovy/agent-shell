@@ -4225,6 +4225,42 @@ direction."
       (should (equal forward "hello world"))
       (should (equal reversed forward)))))
 
+(ert-deftest agent-shell-filter-buffer-substring-strips-text-properties ()
+  "Copied rendered output carries no text properties.
+Faces, display overrides, and internal markers stay in the buffer;
+a copy/paste into another buffer gives plain chars."
+  (with-temp-buffer
+    (insert "**bold** and `code`\n")
+    (agent-shell-markdown-replace-markup)
+    (let ((result (agent-shell--filter-buffer-substring (point-min) (point-max)))
+          (pos 0))
+      (should (equal result "bold and code\n"))
+      (while (< pos (length result))
+        (should-not (text-properties-at pos result))
+        (setq pos (1+ pos))))))
+
+(ert-deftest agent-shell-filter-buffer-substring-strips-block-quote-prefix ()
+  "Copying quoted text drops the \"> \" `agent-shell--block-quote' added."
+  (with-temp-buffer
+    (insert (agent-shell--block-quote "hello\nworld"))
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "hello\nworld"))))
+
+(ert-deftest agent-shell-filter-buffer-substring-strips-one-quote-level ()
+  "Quoting already-quoted text keeps the inner \"> \" on copy."
+  (with-temp-buffer
+    (insert (agent-shell--block-quote "> hello"))
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "> hello"))))
+
+(ert-deftest agent-shell-filter-buffer-substring-keeps-rendered-block-quote ()
+  "Markdown blockquotes copy with their \"> \" so the source round-trips."
+  (with-temp-buffer
+    (insert "> hello\n")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (agent-shell--filter-buffer-substring (point-min) (point-max))
+                   "> hello\n"))))
+
 (ert-deftest agent-shell-trim-strips-untagged-whitespace ()
   ;; Plain `string-trim'-style behavior when nothing is tagged: outer
   ;; whitespace is removed.

@@ -2103,6 +2103,10 @@ See also `agent-shell-confirm-interrupt'."
   "Return visible text between START and END, stripping hidden markup.
 If DELETE is non-nil, delete the text between START and END.
 
+The result carries no text properties, and \"> \" prefixes added
+by `agent-shell--block-quote' are dropped, so pasting a copy gives
+plain text matching what was on screen.
+
 START and END may be given in either order: like the stock
 `buffer-substring', a reversed range (START > END, e.g. a
 right-to-left mouse selection or a kill where mark > point) is
@@ -2125,10 +2129,13 @@ copy depending on selection direction."
         (setq pos (max next (1+ pos)))))
     (when delete
       (delete-region beg fin))
-    (remove-text-properties 0 (length text)
-                            '(line-prefix nil wrap-prefix nil)
-                            text)
-    text))
+    ;; One "> " per line, matching what the block quote inserted.
+    (substring-no-properties
+     (replace-regexp-in-string
+      (rx line-start "> ")
+      (lambda (match)
+        (if (get-text-property 0 'agent-shell-block-quote match) "" match))
+      text nil t))))
 
 (defvar-keymap agent-shell-mode-map
   :parent shell-maker-mode-map
@@ -9743,8 +9750,9 @@ When DEACTIVATE is non-nil, deactivate region/selection."
   "Return TEXT with each line prefixed by \"> \", displayed as a bar.
 
 Underlying text keeps the \"> \" so it remains valid markdown;
-the bar is a display-only override.  Yanks strip both the bar
-styling and the leading \"> \" so paste gives plain text."
+the bar is a display-only override.  The `agent-shell-block-quote'
+property tells `agent-shell--filter-buffer-substring' to drop the
+\"> \" from copies so paste gives plain text."
   (let* ((bar      (propertize "▌" 'face 'agent-shell-markdown-blockquote))
          (wrap     (propertize "▌ " 'face 'agent-shell-markdown-blockquote))
          (quoted   (concat "> " (replace-regexp-in-string
@@ -9755,12 +9763,7 @@ styling and the leading \"> \" so paste gives plain text."
      0 (length rendered)
      (list 'wrap-prefix wrap
            'face 'agent-shell-markdown-blockquote
-           'yank-handler
-           (list (lambda (s)
-                   (insert
-                    (replace-regexp-in-string
-                     (rx line-start "> ") ""
-                     (substring-no-properties s))))))
+           'agent-shell-block-quote t)
      rendered)
     (while (string-match (rx line-start ">") rendered pos)
       (put-text-property (match-beginning 0) (match-end 0)
