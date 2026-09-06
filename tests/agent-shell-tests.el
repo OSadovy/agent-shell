@@ -6557,7 +6557,9 @@ the request itself with an error instead.
 Returns the things that happened, in order: `rendered' (shown as a user
 prompt in the running turn), `submitted' (sent as an ordinary prompt),
 `queued' (added to the pending queue), `reported' (explained in a shell
-fragment) and `interrupted' (the running turn cancelled)."
+fragment) and `interrupted' (the running turn cancelled).  The outcome
+carried by the `prompt-steered' event appears under its own symbol, in
+the position the event was emitted."
   (let ((happened)
         ;; A turn is running when the guards check, which is what lets the
         ;; steer go out at all.  BUSY is what the shell reports later, when
@@ -6597,36 +6599,41 @@ fragment) and `interrupted' (the running turn cancelled)."
               ((symbol-function 'agent-shell--prompt-queue-enqueue)
                (lambda (&rest _) (push 'queued happened)))
               ((symbol-function 'agent-shell--update-fragment)
-               (lambda (&rest _) (push 'reported happened))))
+               (lambda (&rest _) (push 'reported happened)))
+              ((symbol-function 'agent-shell--emit-event)
+               (lambda (&rest args)
+                 (when (eq (plist-get args :event) 'prompt-steered)
+                   (push (map-elt (plist-get args :data) :outcome) happened)))))
       (agent-shell-prompt-steer "actually, just the filenames"))
     (nreverse happened)))
 
 (ert-deftest agent-shell-prompt-steer-outcome-test ()
   "Test `agent-shell-prompt-steer' acts on the agent's own answer."
-  (should (equal (agent-shell-tests--steer-outcome :outcome "injected") '(rendered)))
+  (should (equal (agent-shell-tests--steer-outcome :outcome "injected")
+                 '(rendered injected)))
   ;; The turn had ended and the agent handed the prompt back, so send it as
   ;; an ordinary one.  Claude only, and only because the request opts in.
   (should (equal (agent-shell-tests--steer-outcome :outcome "promptRequired")
-                 '(submitted)))
+                 '(submitted prompt-required)))
   (should (equal (agent-shell-tests--steer-outcome :outcome "startedNewTurn")
-                 '(reported)))
+                 '(reported started-new-turn)))
   ;; Steering never queues: that is `agent-shell-prompt-queue''s job, and a
   ;; queued prompt would reach the agent long after it was asked for.  The
   ;; turn is interrupted so the agent does not carry on in a direction the
   ;; user believes they already corrected.
   (should (equal (agent-shell-tests--steer-outcome :outcome "failed")
-                 '(reported interrupted)))
+                 '(reported declined interrupted)))
   ;; An outcome no agent answers with today must not read as delivered.
   (should (equal (agent-shell-tests--steer-outcome :outcome "somethingNew")
-                 '(reported interrupted)))
+                 '(reported declined interrupted)))
   (should (equal (agent-shell-tests--steer-outcome :outcome nil)
-                 '(reported interrupted)))
+                 '(reported declined interrupted)))
   ;; A request that never got an answer is handled the same way.
   (should (equal (agent-shell-tests--steer-outcome :request-failed t)
-                 '(reported interrupted)))
+                 '(reported declined interrupted)))
   ;; Submitting into a still-busy shell would error, so it reports too.
   (should (equal (agent-shell-tests--steer-outcome :outcome "promptRequired" :busy t)
-                 '(reported interrupted))))
+                 '(reported declined interrupted))))
 
 (cl-defun agent-shell-tests--render-steered-prompt (prompt &key idle)
   "Render PROMPT into a bare shell buffer mid-turn.
