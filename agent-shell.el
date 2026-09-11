@@ -6381,6 +6381,12 @@ Session events:
   `input-submitted'       - User submitted input to the agent
     :data contains :prompt (the text sent to the agent, with any
     truncated regions expanded)
+  `prompt-steered'        - Agent answered a steered prompt
+    :data contains :outcome, one of `injected' (the prompt joined the
+    running turn), `prompt-required' (no turn was running, so the prompt
+    was submitted normally), `started-new-turn' (the agent started a turn
+    of its own, which the shell cannot track) or `declined' (the steer did
+    not land and the running turn was interrupted)
   `idle'                  - Agent idle for variable `agent-shell-idle-timeout'
     seconds :data contains :idle-event and :buffer
 

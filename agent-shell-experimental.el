@@ -46,6 +46,7 @@
 (declare-function acp-make-error "acp")
 (declare-function agent-shell--active-requests-p "agent-shell")
 (declare-function agent-shell--cancel-idle-timer "agent-shell")
+(declare-function agent-shell--emit-event "agent-shell")
 (declare-function agent-shell--expand-truncated-regions "agent-shell")
 (declare-function agent-shell--prompt-content-blocks "agent-shell")
 (declare-function agent-shell--insert-to-shell-buffer "agent-shell")
@@ -224,6 +225,11 @@ Agents differ on which they answer with, so an unrecognised outcome, and
 a request that fails outright, are treated as a steer that did not land:
 reported in the shell, and the running turn interrupted.
 
+Each outcome is also emitted as a `prompt-steered' event carrying it, so
+a client can say what became of the steer.  Three of the four are cases
+where the shell did something other than steer, and two of those end the
+running turn -- visible in the buffer, but nowhere else without this.
+
 Nothing here queues.  Queueing is `agent-shell-prompt-queue', and a steer
 turned into a queued prompt would reach the agent long after the user
 asked for it."
@@ -253,6 +259,10 @@ asked for it."
                     :above-last-prompt (not (agent-shell--active-requests-p
                                              (agent-shell--state))))
                    (map-put! (agent-shell--state) :last-entry-type "steering_declined")
+                   ;; Before the interrupt below, so a subscriber hears why the
+                   ;; turn is about to end rather than only that it did.
+                   (agent-shell--emit-event
+                    :event 'prompt-steered :data '((:outcome . declined)))
                    ;; Interrupted so the agent does not carry on for a long
                    ;; while in a direction the user believes they already
                    ;; corrected.  A declined steer does not say whether
@@ -265,14 +275,18 @@ asked for it."
          ;; Claude and Codex both answer with this one.
          ("injected"
           (agent-shell-experimental--render-steered-prompt
-           :state (agent-shell--state) :prompt prompt))
+           :state (agent-shell--state) :prompt prompt)
+          (agent-shell--emit-event
+           :event 'prompt-steered :data '((:outcome . injected))))
          ;; Claude only, and only because the request opts into it with
          ;; _meta.steering.idleBehavior set to "promptRequired".  A shell
          ;; that has not yet processed its own `session/prompt' response is
          ;; still busy, where submitting errors ("Busy, try later") without
          ;; inserting, so that case falls through to declined.
          ((and "promptRequired" (guard (not (shell-maker-busy))))
-          (agent-shell--insert-to-shell-buffer :text prompt :submit t :no-focus t))
+          (agent-shell--insert-to-shell-buffer :text prompt :submit t :no-focus t)
+          (agent-shell--emit-event
+           :event 'prompt-steered :data '((:outcome . prompt-required))))
          ;; Claude and Codex both answer with this one.  No `session/prompt'
          ;; owns this turn, so nothing signals when it ends: its output
          ;; arrives out of turn and the shell does not show as busy.  See
@@ -297,7 +311,9 @@ asked for it."
           ;; Nothing re-arms it for this turn, since that happens on the
           ;; `session/prompt' response there will never be.  A permission
           ;; request during the turn still arms it on its own.
-          (agent-shell--cancel-idle-timer))
+          (agent-shell--cancel-idle-timer)
+          (agent-shell--emit-event
+           :event 'prompt-steered :data '((:outcome . started-new-turn))))
          ;; Codex's "failed", a "promptRequired" this shell is too busy to
          ;; act on, and anything an agent we do not know about answers with.
          (_
@@ -314,6 +330,8 @@ asked for it."
            :above-last-prompt (not (agent-shell--active-requests-p
                                     (agent-shell--state))))
           (map-put! (agent-shell--state) :last-entry-type "steering_declined")
+          (agent-shell--emit-event
+           :event 'prompt-steered :data '((:outcome . declined)))
           ;; Interrupted so the agent does not carry on for hours in a
           ;; direction the user believes they already corrected.  A declined
           ;; steer does not say whether continuing is harmless, and the cost
