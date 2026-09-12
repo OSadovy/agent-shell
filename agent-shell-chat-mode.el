@@ -336,12 +336,21 @@ to cover what follows it."
             props)
     overlay))
 
+(defun agent-shell-chat--hides-text-p (overlay)
+  "Return non-nil when OVERLAY takes the text it covers off the screen.
+Chat mode hides in two ways: a `display\' string stands in the covered
+text\'s place, and `invisible\' removes it without standing anything
+there.  Either way a reader must not take the buffer text."
+  (or (stringp (overlay-get overlay 'display))
+      (overlay-get overlay 'invisible)))
+
 (defun agent-shell-chat--displayed-substring (start end)
   "Return what the buffer shows between START and END, chat overlays applied.
 
-Chat mode hides the shell prompt and shell-maker's marker behind overlay
-`display', and draws its \"Me\"/agent labels with `before-string', so the
-buffer text and what the user sees disagree.  A copy should follow the
+Chat mode hides the shell prompt behind an overlay `display' and
+shell-maker's marker behind an `invisible', and draws its \"Me\"/agent
+labels with `before-string', so the buffer text and what the user sees
+disagree.  A copy should follow the
 screen, and `buffer-substring' alone cannot: overlays are not text.
 
 Only chat mode's own overlays are substituted, found by the
@@ -371,13 +380,16 @@ returns \"Me\\n\\nhi\"."
                                            (= (overlay-start candidate) pos)))
                                     (overlays-in pos (min end (1+ pos)))))
                  (display (and overlay (overlay-get overlay 'display)))
+                 (hidden (and overlay (agent-shell-chat--hides-text-p overlay)))
                  (next (min end (next-overlay-change pos))))
             (when-let* ((before (and overlay (overlay-get overlay 'before-string))))
               (push before pieces))
-            (cond ((stringp display)
-                   (push display pieces)
-                   ;; Skip what the display stands in for, inner overlays
-                   ;; included.  `next' guarantees progress on an empty overlay.
+            (cond (hidden
+                   ;; An `invisible' run stands nothing in the text's place,
+                   ;; so there is nothing to substitute for it.
+                   (when (stringp display) (push display pieces))
+                   ;; Skip what the overlay hides, inner overlays included.
+                   ;; `next' guarantees progress on an empty overlay.
                    (setq pos (max next (min end (overlay-end overlay)))))
                   (t
                    (push (buffer-substring pos next) pieces)
@@ -444,8 +456,8 @@ For example, at a submitted turn returns \"Me\"."
 (defun agent-shell-chat--hidden-range-at (position)
   "Return the range chat mode draws over at POSITION, or nil for none.
 
-The text is hidden by an overlay `display' standing in its place, which
-is why a reader must not take it: it is not on screen.
+The text is hidden by one of chat mode's overlays, which is why a reader
+must not take it: it is not on screen.
 
 Keys `:start' and `:end' bound the hidden text, `:end' exclusive as in
 `buffer-substring', so a reader resumes there.
@@ -456,8 +468,7 @@ drawn over:
   ((:start . 1) (:end . 9))
 
 putting the resume point at the \"q\" of \"question\"."
-  (when-let* ((hiding (seq-find (lambda (candidate)
-                                  (stringp (overlay-get candidate 'display)))
+  (when-let* ((hiding (seq-find #'agent-shell-chat--hides-text-p
                                 (agent-shell-chat--tagged-overlays-at position))))
     (list (cons :start (overlay-start hiding))
           (cons :end (overlay-end hiding)))))
@@ -1044,7 +1055,20 @@ newline would merge the input line into the response for line motion
                 :tag 'agent :beg body-start :end end
                 :anchor-beg (if split body-start mbeg) :anchor-end end
                 :props (list (cons 'before-string (if split "" before))
-                             (cons 'display "")
+                             ;; Hidden with `invisible' rather than a `display'
+                             ;; of "": this run ends on the newline before the
+                             ;; response, so the response's first line begins a
+                             ;; screen row inside it.  Emacs will not leave
+                             ;; point in display-replaced text and steps it to
+                             ;; the character before the run -- the row above --
+                             ;; so drawn that way the response's first row
+                             ;; cannot be reached by line motion at all.
+                             ;; `invisible' hides the same span and renders the
+                             ;; same, leaving the row a place point can rest.
+                             ;; The nil clears what an earlier version put here,
+                             ;; since overlays are updated in place.
+                             (cons 'display nil)
+                             (cons 'invisible t)
                              ;; The response's first line starts a row inside
                              ;; this overlay, where the label's last row ended,
                              ;; so the row takes its prefix from here rather

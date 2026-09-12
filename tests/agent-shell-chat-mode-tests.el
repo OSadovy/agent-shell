@@ -209,6 +209,21 @@ Chat mode draws labels with `before-string' and hides the prompt behind
                     (agent-shell-chat--displayed-substring (point-min) (point-max)))
                    "Me\n\nhi"))))
 
+(ert-deftest agent-shell-chat--displayed-substring-drops-invisible ()
+  "Text a chat overlay hides with `invisible\' is left out of a copy.
+It stands nothing in the hidden text\'s place, so unlike a `display\'
+string there is nothing to substitute -- but the text is off the screen
+just the same, and a copy follows the screen."
+  (with-temp-buffer
+    (setq-local agent-shell-chat-mode t)
+    (insert "one<shell-maker-end-of-prompt>two")
+    (let ((overlay (make-overlay 4 31)))
+      (overlay-put overlay 'agent-shell-chat--tag 'agent)
+      (overlay-put overlay 'invisible t))
+    (should (equal (substring-no-properties
+                    (agent-shell-chat--displayed-substring (point-min) (point-max)))
+                   "onetwo"))))
+
 (ert-deftest agent-shell-chat--displayed-substring-ignores-foreign-overlays ()
   "Only chat mode's own overlays are substituted.
 An image `display' from elsewhere must not be stringified, so overlays
@@ -298,6 +313,26 @@ response for line motion such as `end-of-visual-line'."
         ;; The overlay begins past the terminator, so it is not covered.
         (should (> (overlay-start agent) terminator))
         (should-not (get-char-property terminator 'display))))))
+
+(ert-deftest agent-shell-chat-agent-keeps-marker-terminator-test ()
+  "The agent overlay leaves the marker's line terminator visible.
+
+The response's first line begins a screen row.  Where the newline ending
+the marker is hidden by `display', that row begins inside display-replaced
+text, which Emacs will not leave point in: line motion arriving there is
+pushed to the character before the run, which is the row above.  The
+response's first row then cannot be reached by `previous-line' at all."
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "hello\n")
+    (agent-shell-chat-mode-tests--marker)
+    (let ((terminator (point)))
+      (insert "\n")
+      (insert "reply\n")
+      (agent-shell-chat--relabel)
+      ;; Covered, but not stood in for: the row keeps a position point can
+      ;; rest on.
+      (should-not (get-char-property terminator 'display)))))
 
 (ert-deftest agent-shell-chat-agent-keeps-terminator-restored-test ()
   "A restored turn keeps the input terminator that follows the marker.
@@ -716,6 +751,46 @@ Needs a real window to measure, so it is skipped in batch."
       (set-window-start window (point-min))
       (should (= (agent-shell-chat-mode-tests--column-of "second line")
                  (agent-shell-chat-mode-tests--column-of "reply"))))))
+
+(ert-deftest agent-shell-chat-response-first-row-reachable-test ()
+  "Line motion into a response reaches a position point can rest on.
+
+The response\'s first line begins a screen row.  Where the newline before
+it is hidden by a `display\' string, that row begins inside display-replaced
+text, and Emacs steps point out of such text from the command loop -- for
+an empty string, to the character before the run, which is the row above.
+The row line motion arrived at is then not the row point ends on, and the
+response\'s first row is stepped over rather than visited.
+
+The response carries the body indent, as a drawn one does: the indent rides
+the hiding overlay, which is what puts the row\'s start inside it.
+
+Needs a real window to measure, so it is skipped in batch."
+  (skip-unless (not noninteractive))
+  (agent-shell-chat-mode-tests--with-shell
+    (agent-shell-chat-mode-tests--prompt "Claude> ")
+    (insert "typed\n")
+    (agent-shell-chat-mode-tests--marker)
+    (insert "\n")
+    (let ((response (point)))
+      (insert (propertize
+               (concat "Fair challenges, and this response is long enough that"
+                       " it wraps across more than one screen row in any window"
+                       " worth measuring in, which is what this needs.\n")
+               'line-prefix "  " 'wrap-prefix "  "))
+      (insert "a line after the response\n")
+      (agent-shell-chat--relabel)
+      (let ((window (selected-window)))
+        (set-window-buffer window (current-buffer))
+        (set-window-start window (point-min))
+        (goto-char response)
+        ;; The response wraps, or there is no second row to come back from.
+        (should (= 1 (vertical-motion 1)))
+        (should (= (line-beginning-position) response))
+        ;; Back up a row, the way `previous-line' does, and land somewhere
+        ;; Emacs will leave point.
+        (should (= -1 (vertical-motion -1)))
+        (should-not (get-char-property (point) 'display))))))
 
 (ert-deftest agent-shell-chat-draft-indent-clears-marker-test ()
   "A draft's later lines are indented past the marker its first line follows.
