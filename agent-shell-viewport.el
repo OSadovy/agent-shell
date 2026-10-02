@@ -71,6 +71,8 @@
 (declare-function agent-shell-prompt-queue-remove "agent-shell-prompt-queue")
 (declare-function agent-shell-prompt-queue-resume "agent-shell-prompt-queue")
 (declare-function agent-shell-view-acp-logs "agent-shell")
+(declare-function agent-shell--beginning-of-block "agent-shell")
+(declare-function agent-shell--end-of-block "agent-shell")
 (declare-function agent-shell-view-traffic "agent-shell")
 (declare-function agent-shell-next-permission-button "agent-shell")
 (declare-function agent-shell-other-buffer "agent-shell")
@@ -1680,6 +1682,8 @@ For example, offer to kill associated shell session."
   (yank-media-handler "image/.*" #'agent-shell--yank-media-image)
   (agent-shell-viewport--update-header)
   (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
+  (setq-local beginning-of-defun-function #'agent-shell--beginning-of-block)
+  (setq-local end-of-defun-function #'agent-shell--end-of-block)
   (setq buffer-read-only t)
   (add-hook 'kill-buffer-hook #'agent-shell-viewport--clean-up nil t))
 
