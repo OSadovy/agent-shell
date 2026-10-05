@@ -125,7 +125,7 @@ advertised by Codex.  This can be used for reasoning effort, for
 example:
 
   (setq agent-shell-openai-default-config-options
-        \='((\"reasoning_effort\" . \"high\")))
+        \\='((\"reasoning_effort\" . \"high\")))
 
 Available values may depend on the selected model.
 Options are applied in the order listed."
