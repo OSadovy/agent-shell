@@ -116,13 +116,20 @@ Can be set to either a string or a function that returns a string."
   :type '(choice (const nil) string function)
   :group 'agent-shell)
 
-(defcustom agent-shell-openai-default-reasoning-effort
+(defcustom agent-shell-openai-default-config-options
   nil
-  "Default Codex reasoning effort.
+  "Default Codex config options, applied at session start.
 
-Must be one of the reasoning-effort values advertised by the selected
-model.  Available values may differ between models."
-  :type '(choice (const nil) string)
+An alist of (OPTION . VALUE), using the option IDs and values
+advertised by Codex.  This can be used for reasoning effort, for
+example:
+
+  (setq agent-shell-openai-default-config-options
+        \='((\"reasoning_effort\" . \"high\")))
+
+Available values may depend on the selected model.
+Options are applied in the order listed."
+  :type '(alist :key-type string :value-type string)
   :group 'agent-shell)
 
 (defcustom agent-shell-openai-default-session-mode-id
@@ -178,10 +185,7 @@ Returns an agent configuration alist using `agent-shell-make-agent-config'."
                                     (funcall agent-shell-openai-default-model-id)
                                   agent-shell-openai-default-model-id))
    :default-session-mode-id (lambda () agent-shell-openai-default-session-mode-id)
-   :default-config-options (lambda ()
-                             (when agent-shell-openai-default-reasoning-effort
-                               (list (cons "reasoning_effort"
-                                           agent-shell-openai-default-reasoning-effort))))
+   :default-config-options (lambda () agent-shell-openai-default-config-options)
    :client-maker (lambda (buffer)
                    (agent-shell-openai-make-codex-client :buffer buffer))
    :install-instructions "See https://github.com/agentclientprotocol/codex-acp for installation."))
