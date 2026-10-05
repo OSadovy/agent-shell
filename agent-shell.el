@@ -382,10 +382,11 @@ An image whose markup ends the text rendered so far is left raw: a
 `{width=...}' block may still be streaming in behind it, and rendering
 before it lands would strand those attributes as literal text (see
 `agent-shell-markdown--image-attributes-pending-p').  Likewise a list
-item or table row on the last line, whose newline has not arrived, as
-the rest of its line may still be on its way.  A response ending in
-any of these never gets that following chunk, so its markup stays raw
-until a render marked complete comes along.
+item, table row, blockquote line or header on the last line, whose
+newline has not arrived, as the rest of its line may still be on its
+way.  A response ending in any of these never gets that following
+chunk, so its markup stays raw until a render marked complete comes
+along.
 
 Re-renders, as complete, every fragment body still holding raw image
 markup or ending in a raw list item or table row.  Other bodies are
@@ -421,6 +422,17 @@ bullet, while a body of prose is untouched."
                             agent-shell-markdown--list-item-last-line-regexp)
                            (not (get-text-property
                                  (point) 'agent-shell-markdown-list-rendered))))
+                    ;; A blockquote line or header whose newline never
+                    ;; arrived.  A rendered header has lost its `#'s.
+                    (save-excursion
+                      (goto-char (point-max))
+                      (beginning-of-line)
+                      (or (and (looking-at-p
+                                agent-shell-markdown--blockquote-last-line-regexp)
+                               (not (get-text-property
+                                     (point) 'agent-shell-markdown-frozen)))
+                          (looking-at-p
+                           agent-shell-markdown--header-last-line-regexp)))
                     ;; A table row whose newline never arrived, either
                     ;; a whole raw row or the rest of a rendered one.
                     (save-excursion

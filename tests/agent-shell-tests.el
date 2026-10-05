@@ -7672,6 +7672,24 @@ would ever render it."
                              (buffer-substring-no-properties (point-min) (point-max))))
               (should (equal "Steps:\n\n- First\n- **Last** one"
                              (agent-shell-markdown-reconstruct (point-min) (point-max))))))
+          ;; A body ending in a blockquote line whose newline never arrived.
+          (with-temp-buffer
+            (insert "Draft:\n\n> Thanks!\n>\n> WDYT?")
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (agent-shell--render-markdown)
+            (should-not (get-text-property (- (point-max) 7) 'display))
+            (agent-shell--render-deferred-markup)
+            (should (get-text-property (- (point-max) 7) 'display))
+            (should (memq 'agent-shell-markdown-blockquote
+                          (ensure-list (get-text-property (1- (point-max)) 'face)))))
+          ;; A body ending in a header whose newline never arrived.
+          (with-temp-buffer
+            (insert "Intro\n\n## Summary")
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (agent-shell--render-markdown)
+            (agent-shell--render-deferred-markup)
+            (should (equal "Intro\n\nSummary"
+                           (buffer-substring-no-properties (point-min) (point-max)))))
           ;; Text outside a fragment body is not a shell rendering target.
           (with-temp-buffer
             (insert (format "plot\n\n![alt](%s)" image-file))

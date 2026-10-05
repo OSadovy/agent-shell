@@ -152,6 +152,24 @@
                    ("c*" (agent-shell-markdown-inline-code))
                    (" d" nil)))))
 
+(ert-deftest agent-shell-markdown-convert-bold-wrapping-inline-code ()
+  ;; Emphasis wholly enclosing a code span still renders; only a span
+  ;; reaching into code (see the tests around this one) is rejected.
+  (should (equal (agent-shell-markdown--deconstruct
+                  (agent-shell-markdown-convert "a **`b`:** c"))
+                 '(("a " nil)
+                   ("b" (agent-shell-markdown-inline-code agent-shell-markdown-bold))
+                   (":" (agent-shell-markdown-bold))
+                   (" c" nil)))))
+
+(ert-deftest agent-shell-markdown-convert-italic-wrapping-inline-code ()
+  (should (equal (agent-shell-markdown--deconstruct
+                  (agent-shell-markdown-convert "a *see `b`* c"))
+                 '(("a " nil)
+                   ("see " (agent-shell-markdown-italic))
+                   ("b" (agent-shell-markdown-inline-code agent-shell-markdown-italic))
+                   (" c" nil)))))
+
 (ert-deftest agent-shell-markdown-convert-bold-closing-inside-inline-code ()
   (should (equal (agent-shell-markdown--deconstruct
                   (agent-shell-markdown-convert "a **b `c**` d"))
@@ -3843,6 +3861,30 @@ A " nil)
                               'face 'agent-shell-markdown-blockquote)))
     (should (eq (get-text-property (+ (point-min) 2) 'face)
                 'agent-shell-markdown-blockquote))))
+
+(ert-deftest agent-shell-markdown-blockquote-renders-last-line-when-complete ()
+  ;; A response ending on a quoted line never gets its newline, so a
+  ;; complete render must not hold that line back.
+  (with-temp-buffer
+    (insert "> a\n>\n> b")
+    (agent-shell-markdown-replace-markup)
+    (should-not (get-text-property (- (point-max) 3) 'display))
+    (agent-shell-markdown-replace-markup :complete t)
+    (should (equal (substring-no-properties (buffer-string)) "> a\n>\n> b"))
+    (should (equal (get-text-property (- (point-max) 3) 'display)
+                   (propertize "▌" 'face 'agent-shell-markdown-blockquote)))
+    (should (eq (get-text-property (1- (point-max)) 'face)
+                'agent-shell-markdown-blockquote))))
+
+(ert-deftest agent-shell-markdown-header-renders-last-line-when-complete ()
+  (with-temp-buffer
+    (insert "Intro\n\n## Title")
+    (agent-shell-markdown-replace-markup)
+    (should (equal (substring-no-properties (buffer-string)) "Intro\n\n## Title"))
+    (agent-shell-markdown-replace-markup :complete t)
+    (should (equal (agent-shell-markdown--deconstruct (buffer-string))
+                   '(("Intro\n\n" nil)
+                     ("Title" (agent-shell-markdown-header-2)))))))
 
 (ert-deftest agent-shell-markdown-blockquote-inside-fence-stays-raw ()
   ;; A `>'-prefixed line inside a fenced code block must not be
