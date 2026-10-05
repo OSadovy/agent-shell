@@ -4641,12 +4641,31 @@ With INCLUDE-PROJECT
             (when (string-search "\n" text)
               "…"))))
 
+(cl-defun agent-shell--fit-to-window-line (&key text buffer reserved)
+  "Return TEXT ellipsized to fit on one line of BUFFER's window.
+
+RESERVED is the number of columns already taken on that line.  BUFFER
+displayed in no window is measured against the selected frame instead.
+
+\"cd /tmp && make test\" with 10 columns to spare -> \"cd /tmp &…\""
+  (when-let* ((text)
+              (available (- (window-body-width
+                             (or (and buffer (get-buffer-window buffer t))
+                                 (frame-root-window)))
+                            (or reserved 0))))
+    (if (> (string-width text) available)
+        (truncate-string-to-width text (max available 1) nil nil "…")
+      text)))
+
 (defun agent-shell-make-tool-call-label (state tool-call-id)
   "Create tool call label from STATE using TOOL-CALL-ID.
 
 Returns propertized labels in :status and :title propertized."
   (when-let* ((tool-call (map-nested-elt state `(:tool-calls ,tool-call-id))))
-    (let* ((title (when-let* ((text (agent-shell--shorten-paths
+    (let* ((status (agent-shell--make-status-kind-label
+                    :status (map-elt tool-call :status)
+                    :kind (map-elt tool-call :kind)))
+           (title (when-let* ((text (agent-shell--shorten-paths
                                      (map-elt tool-call :title)))
                               ;; Execute commands go to body instead; use description as title.
                               ((not (equal (map-elt tool-call :kind) "execute"))))
@@ -4663,8 +4682,15 @@ Returns propertized labels in :status and :title propertized."
                              (map-elt tool-call :description))
                             ;; Fall back to the first line of the command when
                             ;; description is missing for execute tool calls.
+                            ;; Claude Code streams the command ahead of its
+                            ;; description, so keep the stand-in to one line
+                            ;; rather than flash a wrapped command block.
                             (when (equal (map-elt tool-call :kind) "execute")
-                              (agent-shell--first-line (map-elt tool-call :title)))))
+                              (agent-shell--fit-to-window-line
+                               :text (agent-shell--first-line (map-elt tool-call :title))
+                               :buffer (map-elt state :buffer)
+                               ;; Indicator, separator and group indent.
+                               :reserved (+ (string-width (or status "")) 5)))))
            ;; Append a "+N -M" diff summary to edit titles.
            (stats (agent-shell--format-diffs-line-stats (map-elt tool-call :diffs)))
            (label (cond ((and title description
@@ -4678,9 +4704,7 @@ Returns propertized labels in :status and :title propertized."
                          (propertize title 'font-lock-face 'default))
                         (description
                          (propertize description 'font-lock-face 'default)))))
-      `((:status . ,(agent-shell--make-status-kind-label
-                     :status (map-elt tool-call :status)
-                     :kind (map-elt tool-call :kind)))
+      `((:status . ,status)
         (:title . ,(if (and label stats)
                        (concat label " " stats)
                      (or label stats)))))))

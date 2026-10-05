@@ -7511,6 +7511,31 @@ stand in for whatever else the command runs."
     (should (equal "cd /tmp" (funcall label "cd /tmp")))
     (should (equal "cd /tmp" (funcall label "cd /tmp\n")))))
 
+(ert-deftest agent-shell-make-tool-call-label-long-command-fits-line-test ()
+  "A long command standing in for a missing description stays on one line.
+
+Claude Code streams a command ahead of its description, so a wrapped
+command would otherwise flash as a block before the description lands."
+  (let ((state `((:tool-calls . (("t1" . ((:kind . "execute")
+                                          (:status . "pending")
+                                          (:title . ,(make-string 200 ?x)))))))))
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 60)))
+      (let ((label (agent-shell-make-tool-call-label state "t1")))
+        (should (string-suffix-p "…" (map-elt label :title)))
+        (should (<= (+ (string-width (map-elt label :title))
+                       (string-width (map-elt label :status)))
+                    60))))
+    ;; The description replaces the stand-in untouched once it arrives.
+    (should (equal "Build it"
+                   (substring-no-properties
+                    (map-elt (agent-shell-make-tool-call-label
+                              `((:tool-calls . (("t1" . ((:kind . "execute")
+                                                         (:status . "pending")
+                                                         (:title . ,(make-string 200 ?x))
+                                                         (:description . "Build it"))))))
+                              "t1")
+                             :title))))))
+
 (ert-deftest agent-shell--tag-untagged-output-tags-same-chars-test ()
   "Tagging only the untagged tail covers what a whole-range tag would."
   (with-temp-buffer
