@@ -1010,7 +1010,13 @@ Leaf: hide/show its body per `:collapsed'.  Group: recurse into children."
                          :from (map-elt block :start) :to (map-elt block :end)))
                   (invisible-start (agent-shell-ui--labels-end block)))
         (put-text-property invisible-start (map-elt body :end)
-                           'invisible (and (map-elt state :collapsed) t))))))
+                           'invisible (and (map-elt state :collapsed) t))
+        ;; Keep trailing newlines hidden on expand, as
+        ;; `agent-shell-ui--toggle-leaf-fragment-at-point' does, so the
+        ;; next child still gets its own separator.
+        (unless (map-elt state :collapsed)
+          (agent-shell-ui--apply-trailing-whitespace-invisible
+           (map-elt body :start) (map-elt body :end)))))))
 
 (defun agent-shell-ui--set-group-collapsed (group-qualified-id collapsed)
   "Fold or unfold group GROUP-QUALIFIED-ID (recompute-on-toggle).
@@ -1333,6 +1339,13 @@ state-property range first.  User-facing toggling goes through
         (put-text-property (map-elt block :start)
                            (map-elt block :end) 'agent-shell-ui-state state)
         (unless new-collapsed-state
+          ;; Expanding unhid the body's trailing newlines too.  Left
+          ;; visible, a group child added below counts them as its
+          ;; separator (see `agent-shell-ui--required-newlines') and
+          ;; inserts none, so collapsing again pulls that child onto
+          ;; this header line.
+          (agent-shell-ui--apply-trailing-whitespace-invisible
+           (map-elt body :start) (map-elt body :end))
           (save-restriction
             (narrow-to-region (map-elt body :start) (map-elt body :end))
             (run-hooks 'agent-shell-ui-post-expand-fragment-at-point-hook)))))))
