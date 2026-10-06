@@ -7968,10 +7968,30 @@ pending-restore state once replay completes."
       ;; fully laid down; notify observers that the shell has settled.
       (agent-shell--emit-event :event 'session-restored))))
 
-(cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init)
+(cl-defun agent-shell--resume-failure-message (&key session-id)
+  "Return the message reporting SESSION-ID couldn't be resumed.
+
+Also describes the fallback `agent-shell--initiate-session-list-and-load'
+takes under `agent-shell-session-strategy'.
+
+With `agent-shell-session-strategy' set to `prompt':
+
+  (agent-shell--resume-failure-message :session-id \"abc\")
+  ;; => \"Couldn't resume session abc. Pick another session to load.\""
+  (format "Couldn't resume session %s. %s"
+          session-id
+          (pcase agent-shell-session-strategy
+            ('latest "Loading the latest session.")
+            ('prompt "Pick another session to load.")
+            (_ "Starting a new one."))))
+
+(cl-defun agent-shell--initiate-session-resume-by-id (&key session-id session-title shell-buffer on-session-init on-failure)
   "Resume or load session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT.
 
-SESSION-TITLE is an optional display title for the resumed session."
+SESSION-TITLE is an optional display title for the resumed session.
+
+ON-FAILURE (lambda ()), when non-nil, replaces the default fallback of
+listing sessions to pick one to load."
   (agent-shell--update-bootstrapping-fragment
    :state (agent-shell--state)
    :block-id "starting"
@@ -8027,15 +8047,18 @@ SESSION-TITLE is an optional display title for the resumed session."
                                        (funcall on-session-init))))
      :on-failure (lambda (_acp-error _raw-message)
                    (map-put! (agent-shell--state) :pending-restore nil)
-                   (message "Couldn't resume session. Starting a new one.")
-                   (agent-shell--update-bootstrapping-fragment
-                    :state (agent-shell--state)
-                    :block-id "starting"
-                    :body "\n\nCouldn't resume session."
-                    :append t)
-                   (agent-shell--initiate-session-list-and-load
-                    :shell-buffer shell-buffer
-                    :on-session-init on-session-init)))))
+                   (if on-failure
+                       (funcall on-failure)
+                     (let ((text (agent-shell--resume-failure-message :session-id session-id)))
+                       (message "%s" text)
+                       (agent-shell--update-bootstrapping-fragment
+                        :state (agent-shell--state)
+                        :block-id "resume_failed"
+                        :body (agent-shell--make-boxed-message
+                               :text (concat "Warning: " text))))
+                     (agent-shell--initiate-session-list-and-load
+                      :shell-buffer shell-buffer
+                      :on-session-init on-session-init))))))
 
 (cl-defun agent-shell--initiate-session-fork-by-id (&key session-id shell-buffer on-session-init)
   "Fork session SESSION-ID with SHELL-BUFFER and ON-SESSION-INIT."
@@ -8081,7 +8104,19 @@ SESSION-TITLE is an optional display title for the resumed session."
                        (agent-shell--initiate-session-resume-by-id
                         :session-id new-session-id
                         :shell-buffer shell-buffer
-                        :on-session-init on-session-init)
+                        :on-session-init on-session-init
+                        ;; The fork itself succeeded, so stay on it rather
+                        ;; than falling back to picking another session.
+                        :on-failure (lambda ()
+                                      (let ((text "Couldn't load forked session. Prompts may fail."))
+                                        (message "%s" text)
+                                        (agent-shell--update-bootstrapping-fragment
+                                         :state (agent-shell--state)
+                                         :block-id "fork_load_failed"
+                                         :body (agent-shell--make-boxed-message
+                                                :text (concat "Warning: " text))))
+                                      (agent-shell--finalize-session-init
+                                       :on-session-init on-session-init)))
                      (agent-shell--finalize-session-init :on-session-init on-session-init))))
    :on-failure (agent-shell--make-error-handler
                 :state (agent-shell--state) :shell-buffer shell-buffer)))

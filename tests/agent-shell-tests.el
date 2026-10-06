@@ -3605,6 +3605,58 @@ so the command must not append a second time."
     (should (equal (map-nested-elt (car failure) '(message))
                    "Agent repeated a session/list cursor"))))
 
+(ert-deftest agent-shell--resume-failure-message-test ()
+  "Test the resume failure message describes each strategy's fallback."
+  (dolist (case '((latest . "Couldn't resume session abc. Loading the latest session.")
+                  (prompt . "Couldn't resume session abc. Pick another session to load.")
+                  (new . "Couldn't resume session abc. Starting a new one.")
+                  (new-deferred . "Couldn't resume session abc. Starting a new one.")))
+    (let ((agent-shell-session-strategy (car case)))
+      (should (equal (agent-shell--resume-failure-message :session-id "abc") (cdr case))))))
+
+(ert-deftest agent-shell--initiate-session-fork-by-id-resumes-fork-test ()
+  "Test forking resumes the fork and stays on it if resuming fails."
+  (dolist (resume-succeeds '(t nil))
+    (with-temp-buffer
+      (let ((agent-shell-session-restore-verbosity 'minimal)
+            (methods '())
+            (session-init-called nil)
+            (list-and-load-called nil))
+        (setq-local agent-shell--state
+                    (list (cons :buffer (current-buffer))
+                          (cons :client 'test-client)
+                          (cons :supports-session-resume t)
+                          (cons :pending-restore nil)))
+        (cl-letf (((symbol-function 'agent-shell--state)
+                   (lambda () agent-shell--state))
+                  ((symbol-function 'agent-shell--update-bootstrapping-fragment)
+                   #'ignore)
+                  ((symbol-function 'agent-shell--emit-event) #'ignore)
+                  ((symbol-function 'agent-shell--set-session-from-response) #'ignore)
+                  ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
+                  ((symbol-function 'agent-shell--mcp-servers) (lambda () []))
+                  ((symbol-function 'agent-shell--finalize-session-init)
+                   (lambda (&rest args)
+                     (funcall (plist-get args :on-session-init))))
+                  ((symbol-function 'agent-shell--initiate-session-list-and-load)
+                   (lambda (&rest _args) (setq list-and-load-called t)))
+                  ((symbol-function 'agent-shell--send-request)
+                   (lambda (&rest args)
+                     (let ((method (map-elt (plist-get args :request) :method)))
+                       (push method methods)
+                       (if (or (equal method "session/fork") resume-succeeds)
+                           (funcall (plist-get args :on-success)
+                                    '((sessionId . "forked-id")))
+                         (funcall (plist-get args :on-failure) nil nil))))))
+          (let ((inhibit-message t))
+            (agent-shell--initiate-session-fork-by-id
+             :session-id "parent-id"
+             :shell-buffer (current-buffer)
+             :on-session-init (lambda () (setq session-init-called t))))
+          (should (equal (nreverse methods) '("session/fork" "session/resume")))
+          (should session-init-called)
+          (should-not list-and-load-called))))))
+
 (ert-deftest agent-shell--initiate-session-prefers-list-and-load-when-supported ()
   "Test `agent-shell--initiate-session' prefers session/list + session/load."
   (with-temp-buffer
