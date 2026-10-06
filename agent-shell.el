@@ -8071,7 +8071,18 @@ SESSION-TITLE is an optional display title for the resumed session."
                                         (propertize "Forked session" 'font-lock-face 'agent-shell-section-heading))
                     :expanded t
                     :body (or new-session-id ""))
-                   (agent-shell--finalize-session-init :on-session-init on-session-init)))
+                   ;; Some agents (e.g. claude-agent-acp) fork by copying the
+                   ;; transcript only, returning neither models nor modes and
+                   ;; leaving the new session inactive (prompts fail with
+                   ;; "Session not found").  Resuming activates it and also
+                   ;; replays the forked history when loading.
+                   (if (or (map-elt (agent-shell--state) :supports-session-load)
+                           (map-elt (agent-shell--state) :supports-session-resume))
+                       (agent-shell--initiate-session-resume-by-id
+                        :session-id new-session-id
+                        :shell-buffer shell-buffer
+                        :on-session-init on-session-init)
+                     (agent-shell--finalize-session-init :on-session-init on-session-init))))
    :on-failure (agent-shell--make-error-handler
                 :state (agent-shell--state) :shell-buffer shell-buffer)))
 
