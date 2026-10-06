@@ -2323,6 +2323,43 @@ fast: requesting on... done"))
       (funcall success-callback nil)
       (should (equal (agent-shell--current-model-id state) "gpt-5.5")))))
 
+(ert-deftest agent-shell--make-transcript-frontmatter-test ()
+  "Test `agent-shell--make-transcript-frontmatter' function."
+  ;; All fields present.
+  (should (equal (agent-shell--make-transcript-frontmatter
+                  '(("agent" . "Claude")
+                    ("started" . "2025-11-02T18:17:41-05:00")
+                    ("working_directory" . "/home/user/project/")
+                    ("session_id" . "eb5b6105")
+                    ("model" . "opus")))
+                 "---
+agent: \"Claude\"
+started: \"2025-11-02T18:17:41-05:00\"
+working_directory: \"/home/user/project/\"
+session_id: \"eb5b6105\"
+model: \"opus\"
+---
+
+"))
+  ;; Nil values omit their key entirely.
+  (should (equal (agent-shell--make-transcript-frontmatter
+                  '(("agent" . "Claude")
+                    ("session_id" . nil)
+                    ("model" . nil)))
+                 "---
+agent: \"Claude\"
+---
+
+"))
+  ;; Quotes, backslashes and newlines are escaped.
+  (should (equal (agent-shell--make-transcript-frontmatter
+                  '(("working_directory" . "C:\\Users\\\"me\"\nproject")))
+                 "---
+working_directory: \"C:\\\\Users\\\\\\\"me\\\"\\nproject\"
+---
+
+")))
+
 (ert-deftest agent-shell--make-transcript-tool-call-entry-test ()
   "Test `agent-shell--make-transcript-tool-call-entry' function."
   ;; Mock format-time-string to return a predictable value
@@ -2601,7 +2638,7 @@ driven by a single helper on both paths."
           (agent-shell--append-transcript :text "after\n" :file-path file)
           (with-temp-buffer
             (insert-file-contents file)
-            (should (string-prefix-p "# Agent Shell Transcript" (buffer-string)))
+            (should (string-prefix-p "---\nagent: " (buffer-string)))
             (should (string-suffix-p "after\n" (buffer-string)))))
       (delete-directory root t))))
 
@@ -3567,6 +3604,58 @@ so the command must not append a second time."
     (should-not sessions)
     (should (equal (map-nested-elt (car failure) '(message))
                    "Agent repeated a session/list cursor"))))
+
+(ert-deftest agent-shell--resume-failure-message-test ()
+  "Test the resume failure message describes each strategy's fallback."
+  (dolist (case '((latest . "Couldn't resume session abc. Loading the latest session.")
+                  (prompt . "Couldn't resume session abc. Pick another session to load.")
+                  (new . "Couldn't resume session abc. Starting a new one.")
+                  (new-deferred . "Couldn't resume session abc. Starting a new one.")))
+    (let ((agent-shell-session-strategy (car case)))
+      (should (equal (agent-shell--resume-failure-message :session-id "abc") (cdr case))))))
+
+(ert-deftest agent-shell--initiate-session-fork-by-id-resumes-fork-test ()
+  "Test forking resumes the fork and stays on it if resuming fails."
+  (dolist (resume-succeeds '(t nil))
+    (with-temp-buffer
+      (let ((agent-shell-session-restore-verbosity 'minimal)
+            (methods '())
+            (session-init-called nil)
+            (list-and-load-called nil))
+        (setq-local agent-shell--state
+                    (list (cons :buffer (current-buffer))
+                          (cons :client 'test-client)
+                          (cons :supports-session-resume t)
+                          (cons :pending-restore nil)))
+        (cl-letf (((symbol-function 'agent-shell--state)
+                   (lambda () agent-shell--state))
+                  ((symbol-function 'agent-shell--update-bootstrapping-fragment)
+                   #'ignore)
+                  ((symbol-function 'agent-shell--emit-event) #'ignore)
+                  ((symbol-function 'agent-shell--set-session-from-response) #'ignore)
+                  ((symbol-function 'agent-shell-cwd) (lambda () "/tmp"))
+                  ((symbol-function 'agent-shell--mcp-servers) (lambda () []))
+                  ((symbol-function 'agent-shell--finalize-session-init)
+                   (lambda (&rest args)
+                     (funcall (plist-get args :on-session-init))))
+                  ((symbol-function 'agent-shell--initiate-session-list-and-load)
+                   (lambda (&rest _args) (setq list-and-load-called t)))
+                  ((symbol-function 'agent-shell--send-request)
+                   (lambda (&rest args)
+                     (let ((method (map-elt (plist-get args :request) :method)))
+                       (push method methods)
+                       (if (or (equal method "session/fork") resume-succeeds)
+                           (funcall (plist-get args :on-success)
+                                    '((sessionId . "forked-id")))
+                         (funcall (plist-get args :on-failure) nil nil))))))
+          (let ((inhibit-message t))
+            (agent-shell--initiate-session-fork-by-id
+             :session-id "parent-id"
+             :shell-buffer (current-buffer)
+             :on-session-init (lambda () (setq session-init-called t))))
+          (should (equal (nreverse methods) '("session/fork" "session/resume")))
+          (should session-init-called)
+          (should-not list-and-load-called))))))
 
 (ert-deftest agent-shell--initiate-session-prefers-list-and-load-when-supported ()
   "Test `agent-shell--initiate-session' prefers session/list + session/load."
@@ -6454,6 +6543,97 @@ tense while any member is still unfinished."
     ;; A `think'-kind call and a thought chunk still read a single "Thought".
     (should (equal "Thought" (text (list (tc "a" "think" "completed")) t)))))
 
+(ert-deftest agent-shell--initial-tool-call-locations-test ()
+  "Count files from locations in the initial tool notification."
+  (let ((state (agent-shell--make-state
+                :agent-config (agent-shell-make-agent-config :identifier 'test))))
+    (cl-letf (((symbol-function 'agent-shell--update-fragment) #'ignore)
+              ((symbol-function 'agent-shell--emit-event) #'ignore)
+              ((symbol-function 'agent-shell-make-tool-call-label) #'ignore)
+              ((symbol-function 'agent-shell--cancel-idle-timer) #'ignore)
+              ((symbol-function 'agent-shell--active-requests-p) (lambda (_) t))
+              ((symbol-function 'agent-shell--sync-activity-group-fold) #'ignore))
+      (agent-shell--on-notification
+       :state state
+       :acp-notification '((method . "session/update")
+                           (params
+                            (update
+                             (sessionUpdate . "tool_call")
+                             (toolCallId . "read-1")
+                             (title . "Read files")
+                             (kind . "read")
+                             (status . "completed")
+                             (locations . [((path . "a.el")) ((path . "b.el"))]))))))
+    (should (equal "Read 2 files"
+                   (agent-shell--activity-group-descriptive-text
+                    :members (map-elt state :tool-calls))))))
+
+(ert-deftest agent-shell--tool-call-file-paths-test ()
+  "Ignore invalid paths and fall back to another reported source."
+  (should (equal '("a.el")
+                 (agent-shell--tool-call-file-paths
+                  '((:diffs . (((:file . "")) ((:file . 42))))
+                    (:locations . [((path . "")) ((path . 42)) ((path . "a.el"))])))))
+  (should (equal '("b.el")
+                 (agent-shell--tool-call-file-paths
+                  '((:locations . [((path . "")) ((path . 42))])
+                    (:raw-input . ((path . "") (file_path . "b.el")))))))
+  (should-not (agent-shell--tool-call-file-paths
+               '((:raw-input . ((path . 42) (file_path . ""))))))
+  (dolist (key '(filepath fileName path file_path))
+    (should (equal "a.el" (agent-shell--raw-input-file-path
+                          (list (cons key "a.el")))))))
+
+(ert-deftest agent-shell--activity-group-edit-file-count-test ()
+  "Edit summaries count distinct files and handle missing paths."
+  (let ((call '((:kind . "edit") (:status . "completed")
+                (:diffs . (((:file . "a.el")) ((:file . "b.el")))))))
+    (should (equal "Edited 2 files"
+                   (agent-shell--activity-group-descriptive-text
+                    :members (list (cons "a" call)))))
+    (should (equal "Edited 2 files"
+                   (agent-shell--activity-group-descriptive-text
+                    :members (list (cons "a" call) (cons "b" call)))))
+    (should (equal "Edited a file"
+                   (agent-shell--activity-group-descriptive-text
+                    :members '(("a" . ((:kind . "edit") (:status . "completed")
+                                       (:raw-input . ((file_path . "a.el")))))
+                               ("b" . ((:kind . "edit") (:status . "completed")
+                                       (:locations . (((path . "a.el"))))))))))
+    (should (equal "Edited 2 files"
+                   (agent-shell--activity-group-descriptive-text
+                    :members (list (cons "a" call)
+                                   '("b" . ((:kind . "edit") (:status . "completed")))))))
+    (should (equal "Edit a file"
+                   (agent-shell--activity-group-descriptive-text
+                    :members '(("a" . ((:kind . "edit") (:status . "pending")))))))))
+
+(ert-deftest agent-shell--activity-group-read-delete-file-count-test ()
+  "Reads and deletes count distinct files, falling back to call counts."
+  (dolist (kind '("read" "delete"))
+    (let* ((verb (if (equal kind "read") "Read" "Deleted"))
+           (call (list (cons :kind kind) (cons :status "completed")
+                       '(:locations . [((path . "a.el")) ((path . "b.el"))])))
+           (single (list (cons :kind kind) (cons :status "completed")
+                         '(:raw-input . ((path . "a.el")))))
+           (unknown (list (cons :kind kind) (cons :status "completed"))))
+      (should (equal (concat verb " 2 files")
+                     (agent-shell--activity-group-descriptive-text
+                      :members (list (cons "a" call)))))
+      (should (equal (concat verb " 2 files")
+                     (agent-shell--activity-group-descriptive-text
+                      :members (list (cons "a" call) (cons "b" single)))))
+      (should (equal (concat verb " a file")
+                     (agent-shell--activity-group-descriptive-text
+                      :members (list (cons "a" single) (cons "b" single)))))
+      (should (equal (concat verb " 2 files")
+                     (agent-shell--activity-group-descriptive-text
+                      :members (list (cons "a" single) (cons "b" unknown)))))
+      (map-put! unknown :status "pending")
+      (should (equal (if (equal kind "read") "Read a file" "Delete a file")
+                     (agent-shell--activity-group-descriptive-text
+                      :members (list (cons "a" unknown))))))))
+
 (ert-deftest agent-shell--activity-group-thought-labels-test ()
   "Header labels reflect thoughts recorded on a group.
 A thought-only group reads \"Thinking\" (count) / \"Thought\" (descriptive);
@@ -7383,6 +7563,31 @@ stand in for whatever else the command runs."
     (should (equal "cd /tmp" (funcall label "cd /tmp")))
     (should (equal "cd /tmp" (funcall label "cd /tmp\n")))))
 
+(ert-deftest agent-shell-make-tool-call-label-long-command-fits-line-test ()
+  "A long command standing in for a missing description stays on one line.
+
+Claude Code streams a command ahead of its description, so a wrapped
+command would otherwise flash as a block before the description lands."
+  (let ((state `((:tool-calls . (("t1" . ((:kind . "execute")
+                                          (:status . "pending")
+                                          (:title . ,(make-string 200 ?x)))))))))
+    (cl-letf (((symbol-function 'window-body-width) (lambda (&rest _) 60)))
+      (let ((label (agent-shell-make-tool-call-label state "t1")))
+        (should (string-suffix-p "…" (map-elt label :title)))
+        (should (<= (+ (string-width (map-elt label :title))
+                       (string-width (map-elt label :status)))
+                    60))))
+    ;; The description replaces the stand-in untouched once it arrives.
+    (should (equal "Build it"
+                   (substring-no-properties
+                    (map-elt (agent-shell-make-tool-call-label
+                              `((:tool-calls . (("t1" . ((:kind . "execute")
+                                                         (:status . "pending")
+                                                         (:title . ,(make-string 200 ?x))
+                                                         (:description . "Build it"))))))
+                              "t1")
+                             :title))))))
+
 (ert-deftest agent-shell--tag-untagged-output-tags-same-chars-test ()
   "Tagging only the untagged tail covers what a whole-range tag would."
   (with-temp-buffer
@@ -7544,6 +7749,24 @@ would ever render it."
                              (buffer-substring-no-properties (point-min) (point-max))))
               (should (equal "Steps:\n\n- First\n- **Last** one"
                              (agent-shell-markdown-reconstruct (point-min) (point-max))))))
+          ;; A body ending in a blockquote line whose newline never arrived.
+          (with-temp-buffer
+            (insert "Draft:\n\n> Thanks!\n>\n> WDYT?")
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (agent-shell--render-markdown)
+            (should-not (get-text-property (- (point-max) 7) 'display))
+            (agent-shell--render-deferred-markup)
+            (should (get-text-property (- (point-max) 7) 'display))
+            (should (memq 'agent-shell-markdown-blockquote
+                          (ensure-list (get-text-property (1- (point-max)) 'face)))))
+          ;; A body ending in a header whose newline never arrived.
+          (with-temp-buffer
+            (insert "Intro\n\n## Summary")
+            (put-text-property (point-min) (point-max) 'agent-shell-ui-section 'body)
+            (agent-shell--render-markdown)
+            (agent-shell--render-deferred-markup)
+            (should (equal "Intro\n\nSummary"
+                           (buffer-substring-no-properties (point-min) (point-max)))))
           ;; Text outside a fragment body is not a shell rendering target.
           (with-temp-buffer
             (insert (format "plot\n\n![alt](%s)" image-file))

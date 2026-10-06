@@ -47,6 +47,7 @@
   (require 'subr-x))
 
 (defvar agent-shell-prompt-queue-setup-minibuffer-functions)
+(defvar agent-shell-section-functions)
 
 (declare-function agent-shell-subscribe-to "agent-shell")
 (declare-function agent-shell-unsubscribe "agent-shell")
@@ -1099,8 +1100,9 @@ flips between hidden and `Me' immediately across all shells."
 Deferred so the triggering change's own text properties (e.g. the prompt
 face shell-maker applies after inserting) are in place; coalesced so a
 burst yields a single relabel.  Runs from the event subscription (which
-covers submissions, streaming, turn completion and `session-restored')
-and from `shell-maker-finish-output-hook' (which covers `clear')."
+covers submissions, streaming, turn completion and `session-restored'),
+`shell-maker-finish-output-hook' (`clear') and
+`agent-shell-section-functions' (fragments rendered with no event)."
   (when (and agent-shell-chat--labeled
              (not agent-shell-chat--relabel-timer))
     (setq agent-shell-chat--relabel-timer
@@ -1152,7 +1154,9 @@ relabel tracks submissions, streaming responses, turn completion and
 reloads (`session-restored'), and adds a buffer-local
 `shell-maker-finish-output-hook' so `clear' and the other internal
 commands (which reprint the prompt with no `agent-shell' event) relabel
-too."
+too.  A buffer-local `agent-shell-section-functions' relabels after
+fragments rendered with no event, which the live prompt's label would
+otherwise hide."
   (unless agent-shell-chat--labeled
     (setq-local agent-shell-chat--labeled t)
     (agent-shell-chat--relabel)
@@ -1162,12 +1166,16 @@ too."
                  :on-event #'agent-shell-chat--schedule-relabel))
     (add-hook 'shell-maker-finish-output-hook
               #'agent-shell-chat--schedule-relabel nil t)
+    (add-hook 'agent-shell-section-functions
+              #'agent-shell-chat--schedule-relabel nil t)
     (add-hook 'agent-shell-prompt-queue-setup-minibuffer-functions
               #'agent-shell-chat--decorate-queued-prompt)))
 
 (defun agent-shell-chat--disable ()
-  "Remove chat labels, subscription, timer and hook from the current buffer."
+  "Remove chat labels, subscription, timer and hooks from the current buffer."
   (remove-hook 'shell-maker-finish-output-hook
+               #'agent-shell-chat--schedule-relabel t)
+  (remove-hook 'agent-shell-section-functions
                #'agent-shell-chat--schedule-relabel t)
   (when agent-shell-chat--subscription
     (agent-shell-unsubscribe :subscription agent-shell-chat--subscription))

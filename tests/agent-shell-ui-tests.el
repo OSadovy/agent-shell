@@ -83,6 +83,17 @@ Returns the buffer.  Caller must kill it."
                                     'agent-shell-ui-state)
                  :collapsed)))))
 
+(defun agent-shell-ui-tests--visible-text ()
+  "Return the current buffer's text with invisible chars left out.
+
+For example, collapsed \"First\" and \"Second\" fragments read
+\"\\n\\n▶ First\\n\\n▶ Second\\n\\n\"."
+  (seq-mapcat (lambda (pos)
+                (unless (invisible-p pos)
+                  (string (char-after pos))))
+              (number-sequence (point-min) (1- (point-max)))
+              'string))
+
 ;;; majority-collapsed-p
 
 (ert-deftest agent-shell-ui-majority-collapsed-all-collapsed-test ()
@@ -233,6 +244,65 @@ Returns the buffer.  Caller must kill it."
           ;; Fragment starts expanded, toggle should collapse it
           (agent-shell-ui-toggle-fragment)
           (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1")))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-toggle-fragment-keeps-next-block-on-own-line-test ()
+  "Collapsing keeps a group child added while expanded on its own line.
+
+Expanding must leave the body's trailing newlines hidden, or the next
+child counts them as its separator and they vanish on collapse, pulling
+that child onto the header line."
+  (let ((buf (generate-new-buffer " *test-ui-fragments*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (agent-shell-ui-mode 1)
+          (agent-shell-ui-update-fragment
+           (agent-shell-ui-make-fragment-model
+            :namespace-id "ns" :block-id "1" :group-id "g" :group-label "Tools"
+            :label-left "First" :body "body one\n\n"))
+          (goto-char (point-min))
+          (search-forward "First")
+          (agent-shell-ui-toggle-fragment)
+          (agent-shell-ui-update-fragment
+           (agent-shell-ui-make-fragment-model
+            :namespace-id "ns" :block-id "2" :group-id "g" :group-label "Tools"
+            :label-left "Second" :body "body two"))
+          (goto-char (point-min))
+          (search-forward "First")
+          (agent-shell-ui-toggle-fragment)
+          (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1"))
+          (should-not (string-match-p "First.*Second"
+                                      (agent-shell-ui-tests--visible-text))))
+      (kill-buffer buf))))
+
+(ert-deftest agent-shell-ui-group-expand-keeps-next-child-on-own-line-test ()
+  "Re-expanding a group keeps an expanded child's trailing newlines hidden.
+
+Otherwise a child added afterwards counts them as its separator and
+lands on the earlier child's header line once that child collapses."
+  (let ((buf (generate-new-buffer " *test-ui-fragments*")))
+    (unwind-protect
+        (with-current-buffer buf
+          (agent-shell-ui-mode 1)
+          (agent-shell-ui-update-fragment
+           (agent-shell-ui-make-fragment-model
+            :namespace-id "ns" :block-id "1" :group-id "g" :group-label "Tools"
+            :label-left "First" :body "body one\n\n")
+           :expanded t)
+          (agent-shell-ui-set-group-collapsed-by-id
+           :namespace-id "ns" :block-id "g" :collapsed t)
+          (agent-shell-ui-set-group-collapsed-by-id
+           :namespace-id "ns" :block-id "g" :collapsed nil)
+          (agent-shell-ui-update-fragment
+           (agent-shell-ui-make-fragment-model
+            :namespace-id "ns" :block-id "2" :group-id "g" :group-label "Tools"
+            :label-left "Second" :body "body two"))
+          (goto-char (point-min))
+          (search-forward "First")
+          (agent-shell-ui-toggle-fragment)
+          (should (agent-shell-ui-tests--fragment-collapsed-p "ns" "1"))
+          (should-not (string-match-p "First.*Second"
+                                      (agent-shell-ui-tests--visible-text))))
       (kill-buffer buf))))
 
 ;;; isearch

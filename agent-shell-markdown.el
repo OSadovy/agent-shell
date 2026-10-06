@@ -437,7 +437,8 @@ body un-fontified."
                      (strike-changed (agent-shell-markdown--replace-strikethroughs
                                       :avoid-ranges avoid-ranges)))
                  (or italic-changed bold-changed strike-changed)))
-        (agent-shell-markdown--replace-headers :avoid-ranges avoid-ranges)
+        (agent-shell-markdown--replace-headers :avoid-ranges avoid-ranges
+                                             :complete (or force complete))
         (agent-shell-markdown--style-inline-code :avoid-ranges source-ranges)
         (agent-shell-markdown--replace-links :avoid-ranges avoid-ranges)
         (when render-images
@@ -460,7 +461,8 @@ body un-fontified."
                         source-ranges rendered-ranges)
          :inline-ranges inline-ranges)
         (agent-shell-markdown--style-dividers :avoid-ranges avoid-ranges)
-        (agent-shell-markdown--style-blockquotes :avoid-ranges avoid-ranges)
+        (agent-shell-markdown--style-blockquotes :avoid-ranges avoid-ranges
+                                                :complete (or force complete))
         (agent-shell-markdown--style-lists :avoid-ranges avoid-ranges
                                            :complete (or force complete))
         (agent-shell-markdown--style-source-blocks
@@ -702,8 +704,9 @@ bold `let vs let*', still stashing `**let vs let\\***' for copy."
 
 Markup characters are deleted; remaining inner text carries face
 `agent-shell-markdown-bold' layered on top of any existing face
-properties.  Spans that fall inside any of AVOID-RANGES are left
-untouched.  Returns non-nil if at least one replacement was made.
+properties.  Spans that fall inside or reach into any of AVOID-RANGES
+are left untouched.  Returns non-nil if at least one replacement was
+made.
 
 For example, the buffer \"hello **world**.\" becomes \"hello
 world.\" with face `agent-shell-markdown-bold' on \"world\"."
@@ -721,14 +724,19 @@ world.\" with face `agent-shell-markdown-bold' on \"world\"."
              (markup-end (match-end 1))
              (avoid (agent-shell-markdown-in-avoid-range-p
                      markup-start markup-end avoid-ranges)))
-        (if avoid
-            (goto-char (cdr avoid))
+        (cond
+         (avoid
+          (goto-char (cdr avoid)))
+         ((agent-shell-markdown--straddles-avoid-range-p
+           markup-start markup-end avoid-ranges)
+          (goto-char (1+ markup-start)))
+         (t
           (agent-shell-markdown--emphasize-span
            :markup-start markup-start :markup-end markup-end
            :content-start (or (match-beginning 2) (match-beginning 3))
            :content-end (or (match-end 2) (match-end 3))
            :face 'agent-shell-markdown-bold)
-          (setq changed t))))
+          (setq changed t)))))
     changed))
 
 (cl-defun agent-shell-markdown--replace-italics (&key avoid-ranges)
@@ -741,7 +749,11 @@ untouched.  Returns non-nil if at least one replacement was made.
 
 A `_X_' span must be followed by punctuation, whitespace, or a line
 end, so intraword underscores such as \"_hello_world\" are left as
-literal text rather than emphasized.
+literal text rather than emphasized.  X may not start or end with
+whitespace, so a lone delimiter like the one in \"a * b *\" stays
+literal, as in CommonMark.  Spans reaching into an AVOID-RANGES
+entry (e.g. ending on the `*' of \"* and `*`\") are left alone too,
+since code spans bind tighter than emphasis.
 
 For example, the buffer \"hello *world*.\" becomes \"hello
 world.\" with face `agent-shell-markdown-italic' on \"world\"."
@@ -750,23 +762,36 @@ world.\" with face `agent-shell-markdown-italic' on \"world\"."
     (goto-char (point-min))
     (while (re-search-forward
             (rx (or (seq (or bol (one-or-more (any "\n \t")))
-                         (group "*" (group (one-or-more (not (any "\n*")))) "*"))
+                         (group "*"
+                                (group (not (any "\n\t *"))
+                                       (optional (zero-or-more (not (any "\n*")))
+                                                 (not (any "\n\t *"))))
+                                "*"))
                     (seq (or bol (one-or-more (any "\n \t")))
-                         (group "_" (group (one-or-more (not (any "\n_")))) "_")
+                         (group "_"
+                                (group (not (any "\n\t _"))
+                                       (optional (zero-or-more (not (any "\n_")))
+                                                 (not (any "\n\t _"))))
+                                "_")
                          (or (syntax punctuation) (syntax whitespace) line-end))))
             nil t)
       (let* ((markup-start (or (match-beginning 1) (match-beginning 3)))
              (markup-end (or (match-end 1) (match-end 3)))
              (avoid (agent-shell-markdown-in-avoid-range-p
                      markup-start markup-end avoid-ranges)))
-        (if avoid
-            (goto-char (cdr avoid))
+        (cond
+         (avoid
+          (goto-char (cdr avoid)))
+         ((agent-shell-markdown--straddles-avoid-range-p
+           markup-start markup-end avoid-ranges)
+          (goto-char (1+ markup-start)))
+         (t
           (agent-shell-markdown--emphasize-span
            :markup-start markup-start :markup-end markup-end
            :content-start (or (match-beginning 2) (match-beginning 4))
            :content-end (or (match-end 2) (match-end 4))
            :face 'agent-shell-markdown-italic)
-          (setq changed t))))
+          (setq changed t)))))
     changed))
 
 (cl-defun agent-shell-markdown--replace-strikethroughs (&key avoid-ranges)
@@ -774,8 +799,8 @@ world.\" with face `agent-shell-markdown-italic' on \"world\"."
 
 Markup characters are deleted; remaining inner text carries face
 `agent-shell-markdown-strikethrough' layered on top of any existing face
-properties.  Spans inside any of AVOID-RANGES are left untouched.
-Returns non-nil if at least one replacement was made.
+properties.  Spans inside or reaching into any of AVOID-RANGES are
+left untouched.  Returns non-nil if at least one replacement was made.
 
 For example, the buffer \"a ~~b~~ c\" becomes \"a b c\" with face
 `agent-shell-markdown-strikethrough' on \"b\"."
@@ -789,16 +814,31 @@ For example, the buffer \"a ~~b~~ c\" becomes \"a b c\" with face
              (markup-end (match-end 0))
              (avoid (agent-shell-markdown-in-avoid-range-p
                      markup-start markup-end avoid-ranges)))
-        (if avoid
-            (goto-char (cdr avoid))
+        (cond
+         (avoid
+          (goto-char (cdr avoid)))
+         ((agent-shell-markdown--straddles-avoid-range-p
+           markup-start markup-end avoid-ranges)
+          (goto-char (1+ markup-start)))
+         (t
           (agent-shell-markdown--emphasize-span
            :markup-start markup-start :markup-end markup-end
            :content-start (match-beginning 1) :content-end (match-end 1)
            :face 'agent-shell-markdown-strikethrough)
-          (setq changed t))))
+          (setq changed t)))))
     changed))
 
-(cl-defun agent-shell-markdown--replace-headers (&key avoid-ranges)
+(defconst agent-shell-markdown--header-last-line-regexp
+  (rx bol (zero-or-more blank) (one-or-more "#")
+      (one-or-more blank)
+      (one-or-more (not (any "\n")))
+      eos)
+  "Regexp matching a header line anchored at the accessible buffer end.
+Like the line `agent-shell-markdown--replace-headers' matches, but
+ending at `eos' instead of a trailing `\\n'.  Used to find a header
+ending text that is complete, so no newline is coming for it.")
+
+(cl-defun agent-shell-markdown--replace-headers (&key avoid-ranges complete)
   "Replace `# X' / `## X' / ... headers with X faced as `org-level-N'.
 
 The `#' prefix and one or more separator spaces are stripped; the
@@ -810,7 +850,9 @@ Requires an explicit trailing newline — a header at end-of-buffer
 without `\\n' is treated as still streaming and left raw, so a
 chunk that lands `# He' followed later by `llo World\\n' renders
 the full `Hello World' on the second call rather than eagerly
-facing `He' and leaving `llo World' plain.
+facing `He' and leaving `llo World' plain.  Pass COMPLETE non-nil
+when no more text will be appended, so a header ending the buffer
+renders too.
 
 For example, the buffer \"## My title\\n\" becomes \"My title\\n\"
 with face `agent-shell-markdown-header-2' on \"My title\"."
@@ -819,7 +861,8 @@ with face `agent-shell-markdown-header-2' on \"My title\"."
     (while (re-search-forward
             (rx bol (zero-or-more blank) (group (one-or-more "#"))
                 (one-or-more blank)
-                (group (one-or-more (not (any "\n")))) "\n")
+                (group (one-or-more (not (any "\n"))))
+                (group (regexp (if complete (rx (or "\n" eos)) "\n"))))
             nil t)
       (let* ((markup-start (match-beginning 0))
              (markup-end (match-end 0))
@@ -836,13 +879,15 @@ with face `agent-shell-markdown-header-2' on \"My title\"."
                  ;; `text' keeps the title's own properties.  Carry the newline
                  ;; separately so its trailing-whitespace invisibility does not
                  ;; hide the title.
+                 (terminator (match-string-no-properties 3))
                  (newline-properties
-                  (agent-shell-markdown--carry-properties (1- markup-end))))
+                  (unless (string-empty-p terminator)
+                    (agent-shell-markdown--carry-properties (1- markup-end)))))
             (delete-region markup-start markup-end)
             (goto-char markup-start)
             (insert text)
             (let ((end (point)))
-              (insert "\n")
+              (insert terminator)
               (when newline-properties
                 (add-text-properties end (point) newline-properties))
               (add-face-text-property
@@ -1474,7 +1519,16 @@ property, so the source markdown round-trips through copy/save."
                  'agent-shell-markdown-frozen t
                  'rear-nonsticky '(display agent-shell-markdown-frozen))))))))
 
-(cl-defun agent-shell-markdown--style-blockquotes (&key avoid-ranges)
+(defconst agent-shell-markdown--blockquote-last-line-regexp
+  (rx bol (zero-or-more blank) ">"
+      (zero-or-more (not (any "\n")))
+      eos)
+  "Regexp matching a blockquote line anchored at the accessible buffer end.
+Like the line `agent-shell-markdown--style-blockquotes' matches, but
+ending at `eos' instead of a trailing `\\n'.  Used to find a blockquote
+line ending text that is complete, so no newline is coming for it.")
+
+(cl-defun agent-shell-markdown--style-blockquotes (&key avoid-ranges complete)
   "Render `>'-prefixed lines as blockquotes with vertical bars.
 
 Each leading `>' character on the line is shown as `▌' via a
@@ -1491,7 +1545,9 @@ Whitespace between `>'s is preserved literally.
 
 Requires an explicit trailing newline — a blockquote line at
 end-of-buffer without `\\n' is treated as still streaming and
-left raw, matching the header behaviour.
+left raw, matching the header behaviour.  Pass COMPLETE non-nil
+when no more text will be appended, so that last line renders too
+\(e.g. a response ending on a quoted line).
 
 Lines inside any of AVOID-RANGES (e.g. fenced code blocks) are
 left untouched."
@@ -1501,7 +1557,8 @@ left untouched."
     (while (re-search-forward
             (rx bol (zero-or-more blank)
                 ">" (zero-or-more (any " \t>"))
-                (zero-or-more (not (any "\n"))) "\n")
+                (zero-or-more (not (any "\n")))
+                (regexp (if complete (rx (or "\n" eos)) "\n")))
             nil t)
       (let* ((line-start (match-beginning 0))
              (line-end (match-end 0))
@@ -1516,7 +1573,10 @@ left untouched."
               (put-text-property (point) (1+ (point)) 'display bar)
               (forward-char 1)
               (skip-chars-forward " \t" line-end)))
-          (add-face-text-property line-start (1- line-end)
+          (add-face-text-property line-start
+                                  (if (eq (char-before line-end) ?\n)
+                                      (1- line-end)
+                                    line-end)
                                   'agent-shell-markdown-blockquote)
           (add-text-properties line-start line-end
                                '(agent-shell-markdown-frozen t
@@ -5109,6 +5169,52 @@ to avoid re-checking the same range on every match inside it."
             (setq hi mid))))
       (when (and candidate (<= end (cdr candidate)))
         candidate))))
+
+(defun agent-shell-markdown--straddles-avoid-range-p (start end avoid-ranges)
+  "Return the range in AVOID-RANGES crossing START or END, or nil.
+
+A range lying wholly inside START..END doesn't count, nor does one
+wholly containing it (see `agent-shell-markdown-in-avoid-range-p').
+AVOID-RANGES is sorted and non-overlapping, as produced by
+`agent-shell-markdown-sort-ranges'.  Emphasis passes use this to
+reject a span that reaches into inline code, such as the `*' pair
+in \"* and `*`\", while still emphasizing one wrapping it whole,
+such as \"**`foo.el:12`:**\".
+
+A range ending right at END straddles too: inline code ranges
+exclude their backticks, so in \"*b `c*`\" the span ends where the
+code's content does.
+
+For example, with AVOID-RANGES [(5 . 8)], START..END 2..6 and 2..8
+return (5 . 8), while 2..5 and 2..9 return nil."
+  (or (when-let* ((range (agent-shell-markdown--last-range-before
+                          (1+ start) avoid-ranges))
+                  ((< start (cdr range))))
+        range)
+      (when-let* ((range (agent-shell-markdown--last-range-before
+                          end avoid-ranges))
+                  ((<= end (cdr range))))
+        range)))
+
+(defun agent-shell-markdown--last-range-before (pos ranges)
+  "Return the last range in RANGES starting before POS, or nil.
+
+RANGES is a vector of (BEG . END) cons cells sorted ascending by
+BEG, as produced by `agent-shell-markdown-sort-ranges'.
+
+For example, with RANGES [(1 . 3) (5 . 8)], POS 6 returns (5 . 8)
+and POS 5 returns (1 . 3)."
+  (let ((lo 0)
+        (hi (length ranges))
+        (candidate nil))
+    (while (< lo hi)
+      (let* ((mid (/ (+ lo hi) 2))
+             (range (seq-elt ranges mid)))
+        (if (< (car range) pos)
+            (setq candidate range
+                  lo (1+ mid))
+          (setq hi mid))))
+    candidate))
 
 (defun agent-shell-markdown--source-blocks ()
   "Return descriptors for the fenced code blocks in the current buffer.
