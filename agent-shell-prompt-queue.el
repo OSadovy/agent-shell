@@ -38,6 +38,7 @@
 (declare-function agent-shell--insert-to-shell-buffer "agent-shell")
 (declare-function agent-shell--update-fragment "agent-shell")
 (declare-function agent-shell--shell-buffer "agent-shell")
+(declare-function agent-shell-buffers "agent-shell")
 (declare-function agent-shell--state "agent-shell")
 (declare-function agent-shell--echo "agent-shell")
 (declare-function agent-shell-status "agent-shell")
@@ -479,6 +480,49 @@ either remove all or select a specific prompt to remove."
                               (length (map-elt agent-shell--state :pending-prompts))))
         (map-put! agent-shell--state :pending-prompts nil)
         (message "Removed all pending prompts")))))
+
+(defun agent-shell--prompt-queue-confirm-kill-buffer ()
+  "Return non-nil if the current shell may be killed.
+
+Queued prompts live only in the shell buffer, as the agent has not
+received them yet, so killing the shell loses them.  Asks for
+confirmation when any are queued, unless running in batch mode.
+
+For example, given:
+
+  :pending-prompts (\"just the filenames\" \"sorted by size\")
+
+asks:
+
+  2 prompts queued.  Kill anyway? (y or n)
+
+and with a single prompt queued:
+
+  1 prompt queued.  Kill anyway? (y or n)
+
+Added to `kill-buffer-query-functions' in shell buffers."
+  (let ((count (seq-length (map-elt agent-shell--state :pending-prompts))))
+    (or noninteractive
+        (zerop count)
+        (y-or-n-p (format "%d prompt%s queued.  Kill anyway?"
+                          count (if (= count 1) "" "s"))))))
+
+(defun agent-shell--prompt-queue-confirm-kill-emacs ()
+  "Return non-nil if Emacs may exit, given any shells with queued prompts.
+
+Asks once, however many shells hold queued prompts, unless running in
+batch mode.  The question names agent-shell, as the user may not be
+looking at a shell when exiting:
+
+  agent-shell: Queued prompts not sent yet.  Exit anyway? (y or n)
+
+Added to `kill-emacs-query-functions' when a shell starts."
+  (or noninteractive
+      (not (seq-some (lambda (shell-buffer)
+                       (map-elt (buffer-local-value 'agent-shell--state shell-buffer)
+                                :pending-prompts))
+                     (agent-shell-buffers)))
+      (y-or-n-p "agent-shell: Queued prompts not sent yet.  Exit anyway?")))
 
 (provide 'agent-shell-prompt-queue)
 

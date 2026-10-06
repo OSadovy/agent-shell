@@ -7179,6 +7179,65 @@ and its value returned."
   1: \"just the filenames\"
   2: \"sorted by size\""))))
 
+(ert-deftest agent-shell--prompt-queue-confirm-kill-buffer-test ()
+  "Killing a shell with queued prompts asks first, and only then."
+  (let ((buffer (generate-new-buffer " *agent-shell-kill-test*"))
+        (noninteractive nil)
+        (asked nil))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq-local agent-shell--state (list (cons :pending-prompts
+                                                     (list "just the filenames"
+                                                           "sorted by size"))))
+          (add-hook 'kill-buffer-query-functions
+                    #'agent-shell--prompt-queue-confirm-kill-buffer nil t)
+          (cl-letf (((symbol-function 'y-or-n-p)
+                     (lambda (prompt)
+                       (setq asked prompt)
+                       nil)))
+            (should-not (kill-buffer buffer))
+            (should (equal asked "2 prompts queued.  Kill anyway?"))
+            (map-put! agent-shell--state :pending-prompts (list "sorted by size"))
+            (should-not (kill-buffer buffer))
+            (should (equal asked "1 prompt queued.  Kill anyway?"))
+            (setq asked nil)
+            (map-put! agent-shell--state :pending-prompts nil)
+            (should (kill-buffer buffer))
+            (should-not asked)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (kill-local-variable 'kill-buffer-query-functions))
+        (kill-buffer buffer)))))
+
+(ert-deftest agent-shell--prompt-queue-confirm-kill-emacs-test ()
+  "Exiting asks once when any shell has queued prompts."
+  (let ((queued (generate-new-buffer "queued-shell"))
+        (idle (generate-new-buffer "idle-shell"))
+        (noninteractive nil)
+        (asked nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer queued
+            (setq-local agent-shell--state (list (cons :pending-prompts
+                                                       (list "just the filenames")))))
+          (with-current-buffer idle
+            (setq-local agent-shell--state (list (cons :pending-prompts nil))))
+          (cl-letf (((symbol-function 'agent-shell-buffers)
+                     (lambda () (list queued idle)))
+                    ((symbol-function 'y-or-n-p)
+                     (lambda (prompt)
+                       (push prompt asked)
+                       t)))
+            (should (agent-shell--prompt-queue-confirm-kill-emacs))
+            (should (equal asked '("agent-shell: Queued prompts not sent yet.  Exit anyway?")))
+            (setq asked nil)
+            (with-current-buffer queued
+              (map-put! agent-shell--state :pending-prompts nil))
+            (should (agent-shell--prompt-queue-confirm-kill-emacs))
+            (should-not asked)))
+      (kill-buffer queued)
+      (kill-buffer idle))))
+
 (ert-deftest agent-shell-queued-image-keeps-preview-test ()
   "A pasted image keeps its preview through busy queueing and submission."
   (agent-shell-tests--with-persistent-prompt-shell

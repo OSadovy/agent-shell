@@ -4978,6 +4978,10 @@ variable (see makunbound)"))
       (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
       (agent-shell--update-header-and-mode-line)
       (add-hook 'kill-buffer-hook #'agent-shell--clean-up nil t)
+      (add-hook 'kill-buffer-query-functions
+                #'agent-shell--prompt-queue-confirm-kill-buffer nil t)
+      (add-hook 'kill-emacs-query-functions
+                #'agent-shell--prompt-queue-confirm-kill-emacs)
       (add-hook 'change-major-mode-hook #'agent-shell--clean-up nil t)
       (add-hook 'window-configuration-change-hook #'agent-shell--resize-header nil t)
       (agent-shell-ui-mode +1)
