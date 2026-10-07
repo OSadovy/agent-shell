@@ -2096,6 +2096,138 @@ Example:
   (with-current-buffer (or shell-buffer (current-buffer))
     (map-elt agent-shell--state :last-activity-time)))
 
+(cl-defun agent-shell-config-options (&key shell-buffer)
+  "Return the config options the agent advertises, or nil if none.
+
+Each option is an alist holding :id, :name, :description, :category,
+:type, :current-value and :options, where :options lists the values
+the option accepts, each with :value, :name and :description.
+Returns a copy, so modifying it leaves the shell's state untouched.
+
+When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
+Signal an error if the buffer read is not a shell.
+
+A stable public API for packages that integrate with `agent-shell'
+programmatically.  Resolve a shell buffer from a viewport (or the
+surrounding project) with `agent-shell-shell-buffer'.
+
+Example:
+  (agent-shell-config-options)
+  => \\='(((:id . \"model\")
+        (:category . \"model\")
+        (:current-value . \"opus\")
+        (:options . (((:value . \"opus\")
+                      (:name . \"Opus\"))
+                     ...)))
+       ((:id . \"effort\")
+        (:category . \"thought_level\")
+        ...))"
+  (with-current-buffer (or shell-buffer (current-buffer))
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    (copy-tree (agent-shell--config-options agent-shell--state))))
+
+(cl-defun agent-shell-config-option (&key shell-buffer id category)
+  "Return the config option with ID or in CATEGORY, or nil if none.
+
+Pass exactly one of ID or CATEGORY.  CATEGORY is an ACP category such
+as \"thought_level\".  Agents may omit categories, so an option without
+one is only found by ID.  Signal an error when several options share
+CATEGORY, naming their ids so one can be passed as ID instead.
+
+Returns a copy, shaped like the entries of `agent-shell-config-options'.
+
+When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
+Signal an error if the buffer read is not a shell.
+
+A stable public API for packages that integrate with `agent-shell'
+programmatically.  Resolve a shell buffer from a viewport (or the
+surrounding project) with `agent-shell-shell-buffer'.
+
+Example:
+  (agent-shell-config-option :category \"thought_level\")
+  => \\='((:id . \"effort\")
+       (:category . \"thought_level\")
+       (:current-value . \"low\")
+       (:options . (((:value . \"low\")
+                     (:name . \"Low\"))
+                    ...)))"
+  (with-current-buffer (or shell-buffer (current-buffer))
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    (copy-tree (agent-shell--config-option-find
+                :state agent-shell--state
+                :id id
+                :category category))))
+
+(cl-defun agent-shell-config-option-value (&key shell-buffer id category)
+  "Return the current value of the config option, or nil if none.
+
+ID and CATEGORY find the option as in `agent-shell-config-option'.
+
+When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
+Signal an error if the buffer read is not a shell.
+
+A stable public API for packages that integrate with `agent-shell'
+programmatically.  Resolve a shell buffer from a viewport (or the
+surrounding project) with `agent-shell-shell-buffer'.
+
+Example:
+  (agent-shell-config-option-value :category \"thought_level\")
+  => \"low\""
+  (map-elt (agent-shell-config-option :shell-buffer shell-buffer
+                                      :id id
+                                      :category category)
+           :current-value))
+
+(cl-defun agent-shell-set-config-option-value (&key shell-buffer id category
+                                                    value on-success on-failure)
+  "Ask the agent to set the config option to VALUE.
+
+ID and CATEGORY find the option as in `agent-shell-config-option'.
+
+ON-SUCCESS is called with an alist holding :config-option, the option
+as the agent reports it after the change.  ON-FAILURE is called with
+an alist holding :acp-error.  Signal an error when the buffer used is
+not a shell, has no active session, or its agent advertises no such
+option.
+
+When SHELL-BUFFER is non-nil, use that buffer instead of the current one.
+
+A stable public API for packages that integrate with `agent-shell'
+programmatically.  Resolve a shell buffer from a viewport (or the
+surrounding project) with `agent-shell-shell-buffer'.
+
+Example:
+  (agent-shell-set-config-option-value
+   :category \"thought_level\"
+   :value \"high\"
+   :on-success (lambda (result)
+                 (map-nested-elt result \\='(:config-option :current-value))))
+  ;; ON-SUCCESS returns \"high\""
+  (with-current-buffer (or shell-buffer (current-buffer))
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    (unless (map-nested-elt (agent-shell--state) '(:session :id))
+      (error "No active session"))
+    (if-let* ((config-option (agent-shell--config-option-find
+                              :state (agent-shell--state)
+                              :id id
+                              :category category)))
+        (agent-shell--set-session-config-option
+         :config-id (map-elt config-option :id)
+         :value value
+         :on-success (lambda ()
+                       (when on-success
+                         (funcall on-success
+                                  `((:config-option . ,(agent-shell--config-option-get
+                                                        :state (agent-shell--state)
+                                                        :id (map-elt config-option :id)))))))
+         :on-failure (when on-failure
+                       (lambda (acp-error _raw-message)
+                         (funcall on-failure `((:acp-error . ,acp-error))))))
+      (error "Agent advertises no %s option" (or id category)))))
+
 (defun agent-shell-copy-session-id ()
   "Copy the current session ID to the kill ring."
   (declare (modes agent-shell-mode))

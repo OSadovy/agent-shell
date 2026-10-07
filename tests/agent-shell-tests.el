@@ -2218,6 +2218,173 @@ fast: requesting on... done"))
                               :current-value)
                      "gpt-5.5")))))
 
+(ert-deftest agent-shell-config-options-test ()
+  "Test `agent-shell-config-options' reads current or given buffer."
+  (let ((normalized-options (agent-shell--normalize-config-options
+                             [((id . "effort")
+                               (name . "Effort")
+                               (category . "thought_level")
+                               (type . "select")
+                               (currentValue . "low")
+                               (options . [((value . "low") (name . "Low"))
+                                           ((value . "high") (name . "High"))]))])))
+    (with-temp-buffer
+      (setq major-mode 'agent-shell-mode)
+      (setq-local agent-shell--state
+                  `((:session . ((:id . "session-1")
+                                 (:config-options . ,normalized-options)))))
+      (let ((shell-buffer (current-buffer)))
+        (should (equal (agent-shell-config-options) normalized-options))
+        (with-temp-buffer
+          (rename-buffer "not-a-shell" t)
+          (should (string-prefix-p "Not an agent-shell buffer: not-a-shell"
+                                   (cadr (should-error (agent-shell-config-options)))))
+          (let ((config-options (agent-shell-config-options :shell-buffer shell-buffer)))
+            (should (equal config-options normalized-options))
+            (setf (map-elt (car config-options) :current-value) "high")
+            (should (equal (map-elt (car normalized-options) :current-value)
+                           "low"))))))))
+
+(ert-deftest agent-shell-config-option-test ()
+  "Test `agent-shell-config-option' finds options by id or category."
+  (let ((normalized-options (agent-shell--normalize-config-options
+                             [((id . "effort")
+                               (name . "Effort")
+                               (category . "thought_level")
+                               (type . "select")
+                               (currentValue . "low")
+                               (options . [((value . "low") (name . "Low"))
+                                           ((value . "high") (name . "High"))]))])))
+    (with-temp-buffer
+      (setq major-mode 'agent-shell-mode)
+      (setq-local agent-shell--state
+                  `((:session . ((:id . "session-1")
+                                 (:config-options . ,normalized-options)))))
+      (should (equal (agent-shell-config-option :id "effort")
+                     (car normalized-options)))
+      (should (equal (agent-shell-config-option :category "thought_level")
+                     (car normalized-options)))
+      (should-not (agent-shell-config-option :category "model"))
+      (let ((config-option (agent-shell-config-option :id "effort")))
+        (setf (map-elt config-option :current-value) "high")
+        (should (equal (map-elt (car normalized-options) :current-value)
+                       "low"))))))
+
+(ert-deftest agent-shell-config-option-ambiguous-category-test ()
+  "Test `agent-shell-config-option' refuses to guess between options."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state
+                `((:session . ((:id . "session-1")
+                               (:config-options . ,(agent-shell--normalize-config-options
+                                                    [((id . "effort")
+                                                      (category . "thought_level")
+                                                      (currentValue . "low"))
+                                                     ((id . "reasoning")
+                                                      (category . "thought_level")
+                                                      (currentValue . "on"))]))))))
+    (should (equal (cadr (should-error (agent-shell-config-option
+                                        :category "thought_level")))
+                   "Several thought_level options, pass :id with one of: effort, reasoning"))
+    (should (equal (agent-shell-config-option-value :id "reasoning") "on"))
+    (should (equal (cadr (should-error (agent-shell-config-option)))
+                   "Pass either :id or :category"))
+    (should (equal (cadr (should-error (agent-shell-config-option
+                                        :id "effort"
+                                        :category "thought_level")))
+                   "Pass either :id or :category"))))
+
+(ert-deftest agent-shell-config-option-value-test ()
+  "Test `agent-shell-config-option-value' returns the current value."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state
+                `((:session . ((:id . "session-1")
+                               (:config-options . ,(agent-shell--normalize-config-options
+                                                    [((id . "effort")
+                                                      (category . "thought_level")
+                                                      (currentValue . "low"))]))))))
+    (should (equal (agent-shell-config-option-value :id "effort") "low"))
+    (should (equal (agent-shell-config-option-value :category "thought_level") "low"))
+    (should-not (agent-shell-config-option-value :category "model"))))
+
+(ert-deftest agent-shell-set-config-option-value-test ()
+  "Test `agent-shell-set-config-option-value' resolves categories and reports results."
+  (let* ((acp-config-options (lambda (current-value)
+                               `[((id . "effort")
+                                  (name . "Effort")
+                                  (category . "thought_level")
+                                  (type . "select")
+                                  (currentValue . ,current-value)
+                                  (options . [((value . "low") (name . "Low"))
+                                              ((value . "high") (name . "High"))]))]))
+         (normalized-options (agent-shell--normalize-config-options
+                              (funcall acp-config-options "low")))
+         (state (list (cons :client 'test-client)
+                      (cons :session (list (cons :id "session-1")
+                                           (cons :config-options normalized-options)))
+                      (cons :config-options normalized-options)))
+         (sent-request nil)
+         (success-callback nil)
+         (failure-callback nil)
+         (result nil))
+    (with-temp-buffer
+      (setq major-mode 'agent-shell-mode)
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () state))
+                ((symbol-function 'agent-shell--send-request)
+                 (lambda (&rest args)
+                   (setq sent-request (plist-get args :request))
+                   (setq success-callback (plist-get args :on-success))
+                   (setq failure-callback (plist-get args :on-failure))))
+                ((symbol-function 'agent-shell--update-header-and-mode-line)
+                 #'ignore))
+        (agent-shell-set-config-option-value
+         :category "thought_level"
+         :value "high"
+         :on-success (lambda (success)
+                       (setq result success))
+         :on-failure (lambda (failure)
+                       (setq result failure)))
+        (should (equal (map-elt sent-request :method)
+                       "session/set_config_option"))
+        (should (equal (map-nested-elt sent-request '(:params configId))
+                       "effort"))
+        (should (equal (map-nested-elt sent-request '(:params value))
+                       "high"))
+        (funcall success-callback
+                 `((configOptions . ,(funcall acp-config-options "high"))))
+        (should (equal (map-nested-elt result '(:config-option :current-value))
+                       "high"))
+        (funcall failure-callback '((message . "Refused")) nil)
+        (should (equal result '((:acp-error . ((message . "Refused"))))))))))
+
+(ert-deftest agent-shell-set-config-option-value-unadvertised-test ()
+  "Test `agent-shell-set-config-option-value' signals for unadvertised options."
+  (let ((state (list (cons :client 'test-client)
+                     (cons :session (list (cons :id "session-1")
+                                          (cons :models '(((:model-id . "gpt-5")))))))))
+    (with-temp-buffer
+      (setq major-mode 'agent-shell-mode)
+      (cl-letf (((symbol-function 'agent-shell--state)
+                 (lambda () state))
+                ((symbol-function 'agent-shell--send-request)
+                 (lambda (&rest _args)
+                   (error "Should not send a request"))))
+        (should (equal (cadr (should-error (agent-shell-set-config-option-value
+                                            :category "thought_level"
+                                            :value "high")))
+                       "Agent advertises no thought_level option"))
+        (should (equal (cadr (should-error (agent-shell-set-config-option-value
+                                            :category "model"
+                                            :value "gpt-5")))
+                       "Agent advertises no model option"))
+        (with-temp-buffer
+          (should (string-prefix-p "Not an agent-shell buffer"
+                                   (cadr (should-error (agent-shell-set-config-option-value
+                                                        :id "effort"
+                                                        :value "high"))))))))))
+
 (ert-deftest agent-shell--config-option-set-mode-id-config-option-test ()
   "Test mode changes prefer session config options."
   (let* ((initial-config-options [((id . "mode")
