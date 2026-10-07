@@ -1263,6 +1263,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :set-model nil)
         (cons :set-session-mode nil)
         (cons :set-config-options nil)
+        (cons :init-finished nil)
         (cons :session (list (cons :id nil)
                              (cons :config-options nil)
                              (cons :model-id nil)
@@ -2096,6 +2097,33 @@ Example:
   (with-current-buffer (or shell-buffer (current-buffer))
     (map-elt agent-shell--state :last-activity-time)))
 
+(cl-defun agent-shell-initialized-p (&key shell-buffer)
+  "Return non-nil once the shell has finished initializing.
+
+Initializing covers the ACP handshake, authentication, the session and
+any default model, session mode and config options.  Until then, wait
+for the `init-finished' event (see `agent-shell-subscribe-to').
+
+When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
+Signal an error if the buffer read is not a shell.
+
+A stable public API for packages that integrate with `agent-shell'
+programmatically.  Resolve a shell buffer from a viewport (or the
+surrounding project) with `agent-shell-shell-buffer'.
+
+Example:
+  (agent-shell-initialized-p)
+  => t"
+  (with-current-buffer (or shell-buffer (current-buffer))
+    (unless (derived-mode-p 'agent-shell-mode)
+      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    ;; TODO: Remove after 2026-12-07.
+    ;; State made before `:init-finished' existed: a session means
+    ;; initialization already finished.
+    (if (assq :init-finished agent-shell--state)
+        (map-elt agent-shell--state :init-finished)
+      (map-nested-elt agent-shell--state '(:session :id)))))
+
 (cl-defun agent-shell-config-options (&key shell-buffer)
   "Return the config options the agent advertises, or nil if none.
 
@@ -2105,7 +2133,8 @@ the option accepts, each with :value, :name and :description.
 Returns a copy, so modifying it leaves the shell's state untouched.
 
 When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
-Signal an error if the buffer read is not a shell.
+Signal an error if the buffer read is not a shell, or not yet
+`agent-shell-initialized-p'.
 
 A stable public API for packages that integrate with `agent-shell'
 programmatically.  Resolve a shell buffer from a viewport (or the
@@ -2123,8 +2152,8 @@ Example:
         (:category . \"thought_level\")
         ...))"
   (with-current-buffer (or shell-buffer (current-buffer))
-    (unless (derived-mode-p 'agent-shell-mode)
-      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    (unless (agent-shell-initialized-p)
+      (error "Shell not initialized yet: %s" (buffer-name)))
     (copy-tree (agent-shell--config-options agent-shell--state))))
 
 (cl-defun agent-shell-config-option (&key shell-buffer id category)
@@ -2138,7 +2167,8 @@ CATEGORY, naming their ids so one can be passed as ID instead.
 Returns a copy, shaped like the entries of `agent-shell-config-options'.
 
 When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
-Signal an error if the buffer read is not a shell.
+Signal an error if the buffer read is not a shell, or not yet
+`agent-shell-initialized-p'.
 
 A stable public API for packages that integrate with `agent-shell'
 programmatically.  Resolve a shell buffer from a viewport (or the
@@ -2153,8 +2183,8 @@ Example:
                      (:name . \"Low\"))
                     ...)))"
   (with-current-buffer (or shell-buffer (current-buffer))
-    (unless (derived-mode-p 'agent-shell-mode)
-      (error "Not an agent-shell buffer: %s" (buffer-name)))
+    (unless (agent-shell-initialized-p)
+      (error "Shell not initialized yet: %s" (buffer-name)))
     (copy-tree (agent-shell--config-option-find
                 :state agent-shell--state
                 :id id
@@ -2166,7 +2196,8 @@ Example:
 ID and CATEGORY find the option as in `agent-shell-config-option'.
 
 When SHELL-BUFFER is non-nil, read that buffer instead of the current one.
-Signal an error if the buffer read is not a shell.
+Signal an error if the buffer read is not a shell, or not yet
+`agent-shell-initialized-p'.
 
 A stable public API for packages that integrate with `agent-shell'
 programmatically.  Resolve a shell buffer from a viewport (or the
@@ -2189,8 +2220,8 @@ ID and CATEGORY find the option as in `agent-shell-config-option'.
 ON-SUCCESS is called with an alist holding :config-option, the option
 as the agent reports it after the change.  ON-FAILURE is called with
 an alist holding :acp-error.  Signal an error when the buffer used is
-not a shell, has no active session, or its agent advertises no such
-option.
+not a shell, is not yet `agent-shell-initialized-p', or its agent
+advertises no such option.
 
 When SHELL-BUFFER is non-nil, use that buffer instead of the current one.
 
@@ -2206,10 +2237,8 @@ Example:
                  (map-nested-elt result \\='(:config-option :current-value))))
   ;; ON-SUCCESS returns \"high\""
   (with-current-buffer (or shell-buffer (current-buffer))
-    (unless (derived-mode-p 'agent-shell-mode)
-      (error "Not an agent-shell buffer: %s" (buffer-name)))
-    (unless (map-nested-elt (agent-shell--state) '(:session :id))
-      (error "No active session"))
+    (unless (agent-shell-initialized-p)
+      (error "Shell not initialized yet: %s" (buffer-name)))
     (if-let* ((config-option (agent-shell--config-option-find
                               :state (agent-shell--state)
                               :id id
@@ -2740,7 +2769,11 @@ Flow:
                               (agent-shell--handle :command command :shell-buffer shell-buffer))))
           ;; Initialization complete
           (t
-           (agent-shell--emit-event :event 'init-finished)
+           (unless (map-elt (agent-shell--state) :init-finished)
+             ;; TODO: Use `map-put!' after 2026-12-07.
+             ;; `setf' inserts the key into state made before it existed.
+             (setf (map-elt agent-shell--state :init-finished) t)
+             (agent-shell--emit-event :event 'init-finished))
            ;; Send ACP prompt request
            (when (and command (not (string-empty-p (string-trim command))))
              (agent-shell--send-command :prompt command :shell-buffer shell-buffer))))))
@@ -4596,7 +4629,9 @@ For example, shut down ACP client."
     (map-put! (agent-shell--state) :authenticated nil)
     (map-put! (agent-shell--state) :set-model nil)
     (map-put! (agent-shell--state) :set-session-mode nil)
-    (map-put! (agent-shell--state) :set-config-options nil))
+    (map-put! (agent-shell--state) :set-config-options nil)
+    ;; TODO: Use `map-put!' after 2026-12-07 (see `agent-shell--handle').
+    (setf (map-elt agent-shell--state :init-finished) nil))
   (agent-shell-heartbeat-stop
    :heartbeat (map-elt (agent-shell--state) :heartbeat)))
 
@@ -6712,7 +6747,8 @@ Initialization events (emitted in order):
   `session-selected'    - Session chosen (new or existing)
     :data contains :session-id (nil when starting new)
   `session-selection-cancelled' - User cancelled session selection
-  `init-finished'       - Initialization pipeline completed
+  `init-finished'       - Initialization pipeline completed (once per
+                          initialization, see `agent-shell-initialized-p')
   `prompt-ready'        - Shell prompt displayed and ready for input
 
 Session events:

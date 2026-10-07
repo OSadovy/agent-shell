@@ -2218,6 +2218,95 @@ fast: requesting on... done"))
                               :current-value)
                      "gpt-5.5")))))
 
+(ert-deftest agent-shell-initialized-p-test ()
+  "Test `agent-shell-initialized-p' reads current or given buffer."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state (list (cons :init-finished nil)))
+    (should-not (agent-shell-initialized-p))
+    (setf (map-elt agent-shell--state :init-finished) t)
+    (should (agent-shell-initialized-p))
+    (let ((shell-buffer (current-buffer)))
+      (with-temp-buffer
+        (should (agent-shell-initialized-p :shell-buffer shell-buffer))
+        (should (string-prefix-p "Not an agent-shell buffer"
+                                 (cadr (should-error (agent-shell-initialized-p)))))))))
+
+(ert-deftest agent-shell-initialized-p-state-without-init-finished-test ()
+  "Test `agent-shell-initialized-p' falls back to the session for older state."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state '((:session . ((:id . nil)))))
+    (should-not (agent-shell-initialized-p))
+    (setq-local agent-shell--state '((:session . ((:id . "session-1")))))
+    (should (agent-shell-initialized-p))))
+
+(ert-deftest agent-shell-config-option-not-initialized-test ()
+  "Test config option functions signal until the shell is initialized."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (rename-buffer "initializing" t)
+    (setq-local agent-shell--state
+                `((:init-finished . nil)
+                  (:session . ((:id . "session-1")
+                               (:config-options . ,(agent-shell--normalize-config-options
+                                                    [((id . "effort")
+                                                      (category . "thought_level")
+                                                      (currentValue . "low"))]))))))
+    (cl-letf (((symbol-function 'agent-shell--send-request)
+               (lambda (&rest _args)
+                 (error "Should not send a request"))))
+      (dolist (call (list (lambda () (agent-shell-config-options))
+                          (lambda () (agent-shell-config-option :id "effort"))
+                          (lambda () (agent-shell-config-option-value :id "effort"))
+                          (lambda () (agent-shell-set-config-option-value :id "effort"
+                                                                          :value "high"))))
+        (should (string-prefix-p "Shell not initialized yet: initializing"
+                                 (cadr (should-error (funcall call)))))))))
+
+(ert-deftest agent-shell--handle-emits-init-finished-once-test ()
+  "Test `agent-shell--handle' emits `init-finished' once per initialization."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state (agent-shell--make-state :buffer (current-buffer)))
+    (map-put! agent-shell--state :client '((:request-handlers . handlers)
+                                           (:notification-handlers . handlers)
+                                           (:error-handlers . handlers)))
+    (map-put! agent-shell--state :initialized t)
+    (map-put! (map-elt agent-shell--state :session) :id "session-1")
+    (let ((events nil))
+      (cl-letf (((symbol-function 'shell-maker--current-request-id)
+                 (lambda () 0))
+                ((symbol-function 'agent-shell--emit-event)
+                 (lambda (&rest args)
+                   (push (plist-get args :event) events))))
+        (agent-shell--handle :shell-buffer (current-buffer))
+        (should (agent-shell-initialized-p))
+        (agent-shell--handle :shell-buffer (current-buffer))
+        (should (equal events '(init-finished)))))))
+
+(ert-deftest agent-shell--handle-state-without-init-finished-test ()
+  "Test `agent-shell--handle' copes with state made before `:init-finished'."
+  (with-temp-buffer
+    (setq major-mode 'agent-shell-mode)
+    (setq-local agent-shell--state
+                (map-delete (agent-shell--make-state :buffer (current-buffer))
+                            :init-finished))
+    (map-put! agent-shell--state :client '((:request-handlers . handlers)
+                                           (:notification-handlers . handlers)
+                                           (:error-handlers . handlers)))
+    (map-put! agent-shell--state :initialized t)
+    (map-put! (map-elt agent-shell--state :session) :id "session-1")
+    (should-not (assq :init-finished agent-shell--state))
+    (cl-letf (((symbol-function 'shell-maker--current-request-id)
+               (lambda () 0))
+              ((symbol-function 'agent-shell--emit-event)
+               #'ignore))
+      (agent-shell--handle :shell-buffer (current-buffer))
+      (should (agent-shell-initialized-p))
+      (with-temp-buffer
+        (should-not (map-elt agent-shell--state :init-finished))))))
+
 (ert-deftest agent-shell-config-options-test ()
   "Test `agent-shell-config-options' reads current or given buffer."
   (let ((normalized-options (agent-shell--normalize-config-options
@@ -2231,7 +2320,8 @@ fast: requesting on... done"))
     (with-temp-buffer
       (setq major-mode 'agent-shell-mode)
       (setq-local agent-shell--state
-                  `((:session . ((:id . "session-1")
+                  `((:init-finished . t)
+                    (:session . ((:id . "session-1")
                                  (:config-options . ,normalized-options)))))
       (let ((shell-buffer (current-buffer)))
         (should (equal (agent-shell-config-options) normalized-options))
@@ -2258,7 +2348,8 @@ fast: requesting on... done"))
     (with-temp-buffer
       (setq major-mode 'agent-shell-mode)
       (setq-local agent-shell--state
-                  `((:session . ((:id . "session-1")
+                  `((:init-finished . t)
+                    (:session . ((:id . "session-1")
                                  (:config-options . ,normalized-options)))))
       (should (equal (agent-shell-config-option :id "effort")
                      (car normalized-options)))
@@ -2275,7 +2366,8 @@ fast: requesting on... done"))
   (with-temp-buffer
     (setq major-mode 'agent-shell-mode)
     (setq-local agent-shell--state
-                `((:session . ((:id . "session-1")
+                `((:init-finished . t)
+                  (:session . ((:id . "session-1")
                                (:config-options . ,(agent-shell--normalize-config-options
                                                     [((id . "effort")
                                                       (category . "thought_level")
@@ -2299,7 +2391,8 @@ fast: requesting on... done"))
   (with-temp-buffer
     (setq major-mode 'agent-shell-mode)
     (setq-local agent-shell--state
-                `((:session . ((:id . "session-1")
+                `((:init-finished . t)
+                  (:session . ((:id . "session-1")
                                (:config-options . ,(agent-shell--normalize-config-options
                                                     [((id . "effort")
                                                       (category . "thought_level")
@@ -2321,6 +2414,7 @@ fast: requesting on... done"))
          (normalized-options (agent-shell--normalize-config-options
                               (funcall acp-config-options "low")))
          (state (list (cons :client 'test-client)
+                      (cons :init-finished t)
                       (cons :session (list (cons :id "session-1")
                                            (cons :config-options normalized-options)))
                       (cons :config-options normalized-options)))
@@ -2330,9 +2424,8 @@ fast: requesting on... done"))
          (result nil))
     (with-temp-buffer
       (setq major-mode 'agent-shell-mode)
-      (cl-letf (((symbol-function 'agent-shell--state)
-                 (lambda () state))
-                ((symbol-function 'agent-shell--send-request)
+      (setq-local agent-shell--state state)
+      (cl-letf (((symbol-function 'agent-shell--send-request)
                  (lambda (&rest args)
                    (setq sent-request (plist-get args :request))
                    (setq success-callback (plist-get args :on-success))
@@ -2362,13 +2455,13 @@ fast: requesting on... done"))
 (ert-deftest agent-shell-set-config-option-value-unadvertised-test ()
   "Test `agent-shell-set-config-option-value' signals for unadvertised options."
   (let ((state (list (cons :client 'test-client)
+                     (cons :init-finished t)
                      (cons :session (list (cons :id "session-1")
                                           (cons :models '(((:model-id . "gpt-5")))))))))
     (with-temp-buffer
       (setq major-mode 'agent-shell-mode)
-      (cl-letf (((symbol-function 'agent-shell--state)
-                 (lambda () state))
-                ((symbol-function 'agent-shell--send-request)
+      (setq-local agent-shell--state state)
+      (cl-letf (((symbol-function 'agent-shell--send-request)
                  (lambda (&rest _args)
                    (error "Should not send a request"))))
         (should (equal (cadr (should-error (agent-shell-set-config-option-value
