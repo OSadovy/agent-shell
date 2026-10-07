@@ -1624,7 +1624,13 @@ Works from both shell and viewport buffers."
       ;; The restarted shell inherits the directory, so unschedule it here to
       ;; keep this buffer's cleanup from deleting it.
       (setq-local agent-shell--pending-directory-cleanup nil))
-    (kill-buffer shell-buffer)
+    ;; Killing may be declined (e.g. queued prompts), so leave the shell
+    ;; as it was, cleanup included, rather than start a second one.
+    (unless (kill-buffer shell-buffer)
+      (with-current-buffer shell-buffer
+        (setq-local agent-shell--pending-directory-cleanup
+                    pending-directory-cleanup))
+      (user-error "Cancelled"))
     (let* ((default-directory shell-dir)
            (new-shell-buffer (agent-shell--start
                               :config config

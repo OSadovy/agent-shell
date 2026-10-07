@@ -39,6 +39,7 @@
 (declare-function agent-shell--update-fragment "agent-shell")
 (declare-function agent-shell--shell-buffer "agent-shell")
 (declare-function agent-shell-buffers "agent-shell")
+(declare-function agent-shell--display-buffer "agent-shell")
 (declare-function agent-shell--state "agent-shell")
 (declare-function agent-shell--echo "agent-shell")
 (declare-function agent-shell-status "agent-shell")
@@ -511,18 +512,60 @@ Added to `kill-buffer-query-functions' in shell buffers."
   "Return non-nil if Emacs may exit, given any shells with queued prompts.
 
 Asks once, however many shells hold queued prompts, unless running in
-batch mode.  The question names agent-shell, as the user may not be
-looking at a shell when exiting:
+batch mode.  The question names `agent-shell', as the user may not be
+looking at a shell when exiting, and a window lists the shells holding
+queued prompts while it is asked, much like `save-buffers-kill-emacs'
+does for live processes.  Declining keeps the window, where RET or a
+click on a shell name switches to that shell and \\`q' closes it.
+
+For example, given a shell named \"Claude @ proj\" with one queued
+prompt, lists:
+
+  Claude @ proj
+
+  Pending prompts: 1
+
+    1: \"just the filenames\"
+
+and asks:
 
   agent-shell: Queued prompts not sent yet.  Exit anyway? (y or n)
 
 Added to `kill-emacs-query-functions' when a shell starts."
-  (or noninteractive
-      (not (seq-some (lambda (shell-buffer)
-                       (map-elt (buffer-local-value 'agent-shell--state shell-buffer)
-                                :pending-prompts))
-                     (agent-shell-buffers)))
-      (y-or-n-p "agent-shell: Queued prompts not sent yet.  Exit anyway?")))
+  (let ((shells (seq-filter (lambda (shell-buffer)
+                              (map-elt (buffer-local-value 'agent-shell--state shell-buffer)
+                                       :pending-prompts))
+                            (agent-shell-buffers))))
+    (or noninteractive
+        (not shells)
+        (with-current-buffer-window
+         (get-buffer-create "*agent-shell queued prompts*")
+         '(display-buffer-at-bottom
+           (dedicated . t)
+           (window-height . fit-window-to-buffer)
+           (preserve-size . (nil . t)))
+         (lambda (window _value)
+           (let ((exit (with-selected-window window
+                         (y-or-n-p "agent-shell: Queued prompts not sent yet.  Exit anyway?"))))
+             ;; Kept on decline, so its shell names can be followed.
+             (when (and exit (window-live-p window))
+               (quit-restore-window window 'kill))
+             exit))
+         (special-mode)
+         (let ((inhibit-read-only t))
+           (insert (mapconcat (lambda (shell-buffer)
+                                (format "%s
+
+%s"
+                                        (buttonize (buffer-name shell-buffer)
+                                                   (lambda (_)
+                                                     (agent-shell--display-buffer shell-buffer))
+                                                   nil
+                                                   "Switch to shell")
+                                        (with-current-buffer shell-buffer
+                                          (agent-shell--prompt-queue-summary))))
+                              shells
+                              "\n\n")))))))
 
 (provide 'agent-shell-prompt-queue)
 

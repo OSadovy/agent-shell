@@ -7470,7 +7470,7 @@ and its value returned."
         (kill-buffer buffer)))))
 
 (ert-deftest agent-shell--prompt-queue-confirm-kill-emacs-test ()
-  "Exiting asks once when any shell has queued prompts."
+  "Exiting asks once when any shell has queued prompts, listing those shells."
   (let ((queued (generate-new-buffer "queued-shell"))
         (idle (generate-new-buffer "idle-shell"))
         (noninteractive nil)
@@ -7486,10 +7486,19 @@ and its value returned."
                      (lambda () (list queued idle)))
                     ((symbol-function 'y-or-n-p)
                      (lambda (prompt)
-                       (push prompt asked)
+                       (push (list prompt
+                                   (with-current-buffer "*agent-shell queued prompts*"
+                                     (buffer-substring-no-properties (point-min) (point-max))))
+                             asked)
                        t)))
             (should (agent-shell--prompt-queue-confirm-kill-emacs))
-            (should (equal asked '("agent-shell: Queued prompts not sent yet.  Exit anyway?")))
+            (should (equal asked '(("agent-shell: Queued prompts not sent yet.  Exit anyway?"
+                                    "queued-shell
+
+Pending prompts: 1
+
+  1: \"just the filenames\""))))
+            (should-not (get-buffer "*agent-shell queued prompts*"))
             (setq asked nil)
             (with-current-buffer queued
               (map-put! agent-shell--state :pending-prompts nil))
@@ -7497,6 +7506,57 @@ and its value returned."
             (should-not asked)))
       (kill-buffer queued)
       (kill-buffer idle))))
+
+(ert-deftest agent-shell--prompt-queue-confirm-kill-emacs-declined-test ()
+  "Declining to exit keeps the listing, whose shell names switch to the shell."
+  (let ((queued (generate-new-buffer "queued-shell"))
+        (noninteractive nil)
+        (displayed nil))
+    (unwind-protect
+        (progn
+          (with-current-buffer queued
+            (setq-local agent-shell--state (list (cons :pending-prompts
+                                                       (list "just the filenames")))))
+          (cl-letf (((symbol-function 'agent-shell-buffers)
+                     (lambda () (list queued)))
+                    ((symbol-function 'y-or-n-p) #'ignore)
+                    ((symbol-function 'agent-shell--display-buffer)
+                     (lambda (shell-buffer) (setq displayed shell-buffer))))
+            (should-not (agent-shell--prompt-queue-confirm-kill-emacs))
+            (with-current-buffer "*agent-shell queued prompts*"
+              (should (get-buffer-window (current-buffer)))
+              (goto-char (point-min))
+              (push-button))
+            (should (eq displayed queued))))
+      (when-let* ((listing (get-buffer "*agent-shell queued prompts*")))
+        (quit-windows-on listing t))
+      (kill-buffer queued))))
+
+(ert-deftest agent-shell-restart-declined-kill-test ()
+  "A declined kill leaves the shell, and its directory cleanup, in place."
+  (let ((buffer (generate-new-buffer " *agent-shell-restart-test*"))
+        (started nil))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq major-mode 'agent-shell-mode)
+          (setq-local agent-shell--state (list (cons :agent-config nil)))
+          (setq-local agent-shell--pending-directory-cleanup "/tmp/agent-shell-temp")
+          (add-hook 'kill-buffer-query-functions #'ignore nil t)
+          (cl-letf (((symbol-function 'agent-shell--current-shell)
+                     (lambda () buffer))
+                    ((symbol-function 'agent-shell--active-requests-p)
+                     #'ignore)
+                    ((symbol-function 'agent-shell--start)
+                     (lambda (&rest _) (setq started t))))
+            (should-error (agent-shell-restart) :type 'user-error))
+          (should (buffer-live-p buffer))
+          (should (equal agent-shell--pending-directory-cleanup "/tmp/agent-shell-temp"))
+          (should-not started))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (kill-local-variable 'kill-buffer-query-functions)
+          (setq-local agent-shell--pending-directory-cleanup nil))
+        (kill-buffer buffer)))))
 
 (ert-deftest agent-shell-queued-image-keeps-preview-test ()
   "A pasted image keeps its preview through busy queueing and submission."
