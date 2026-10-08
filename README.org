@@ -107,6 +107,7 @@ We now have a handful of additional packages to extend the =agent-shell= experie
 - [[https://github.com/izeigerman/agent-shell-gc][agent-shell-gc]]: Garbage collection for =agent-shell=.
 
 * Articles
+- Enzuru: [[https://enzuru.medium.com/emacs-in-fifty-keystrokes-five-years-later-2026-edition-featuring-meow-and-agent-shell-3d656f273989?source=friends_link&sk=4e1a8ba56819a67c1798cc34b40b8a29][Emacs in fifty keystrokes five years later (2026 edition featuring meow and agent-shell)]].
 - 20Y: [[https://20y.hu/~slink/journal/agent-shell/index.html][Agentic development workflow in Emacs]]
 - Skye: [[https://skyefreeman.com/blog/2026/04/15/how-im-using-llms-with-emacs][How I'm using LLM's via Emacs]].
 - sincebyte: [[https://neoemacs.com/posts/agent-shell-cursor-agent-cli/][Agent Shell Cursor Agent Cli]].
