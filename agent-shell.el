@@ -5843,58 +5843,64 @@ composing a prompt."
 `font-lock-face' is where comint marks submitted prompts.")
 
 (defun agent-shell--property-range (position property)
-  "Return (START . END) of the run of PROPERTY holding POSITION, or nil.
+  "Return the run of PROPERTY holding POSITION, or nil.
 
 For example, with PROPERTY on the three characters from 5, a POSITION
-of 6 returns (5 . 8)."
+of 6 returns:
+
+  ((:start . 5)
+   (:end . 8))"
   (when (get-text-property position property)
-    (cons (previous-single-property-change
-           (1+ position) property nil (point-min))
-          (next-single-property-change position property nil (point-max)))))
+    `((:start . ,(previous-single-property-change
+                  (1+ position) property nil (point-min)))
+      (:end . ,(next-single-property-change
+                position property nil (point-max))))))
 
 (defun agent-shell--submitted-prompt-range (position)
-  "Return (START . END) of the submitted prompt holding POSITION, or nil.
+  "Return the range of the submitted prompt holding POSITION, or nil.
 
-START is the beginning of the prompt's line and END the end of the
-input sent with it.  Submitted input is the text comint highlights
-with `comint-highlight-input'; the prompt still being composed has no
-such text, so it is never one."
-  (let* ((face-p (lambda (pos face)
-                   (and (< pos (point-max))
-                        (memq face (ensure-list
-                                    (get-text-property pos 'font-lock-face))))))
-         (input (if (funcall face-p position 'comint-highlight-prompt)
-                    ;; On the prompt text, the input starts where it ends.
-                    (next-single-property-change
-                     position 'font-lock-face nil (point-max))
-                  position)))
-    (when-let* ((range (and (funcall face-p input 'comint-highlight-input)
-                            (agent-shell--property-range
-                             input 'font-lock-face))))
-      (cons (save-excursion
-              (goto-char (car range))
-              (pos-bol))
-            (cdr range)))))
+In the form:
+
+  ((:start . PROMPT-LINE-START)
+   (:end . INPUT-END))
+
+Submitted input is the text comint highlights with
+`comint-highlight-input'; the prompt still being composed has no such
+text, so it is never one."
+  (let ((input (if (agent-shell-chat--prompt-face-p
+                    (get-text-property position 'font-lock-face))
+                   ;; On the prompt text, the input starts where it ends.
+                   (next-single-property-change
+                    position 'font-lock-face nil (point-max))
+                 position)))
+    (when-let* (((memq 'comint-highlight-input
+                       (ensure-list (get-text-property input 'font-lock-face))))
+                (range (agent-shell--property-range input 'font-lock-face)))
+      `((:start . ,(save-excursion
+                     (goto-char (map-elt range :start))
+                     (pos-bol)))
+        (:end . ,(map-elt range :end))))))
 
 (defun agent-shell--block-ranges-at (position)
   "Return the ranges of the blocks holding the character at POSITION.
 
 Blocks are rendered fragments (messages, thoughts, tool calls, plans
 and the like), fenced source blocks, tables and submitted prompts.
-Each range is (START . END), outermost first.  Only a fragment holds
-other blocks, so listing it first is all that order takes.
+Ranges are listed outermost first.  Only a fragment holds other
+blocks, so listing it first is all that order takes.
 
-For example, inside a source block in a message, returns
-\((MESSAGE-START . MESSAGE-END) (BLOCK-START . BLOCK-END))."
+For example, inside a source block in a message, returns:
+
+  (((:start . MESSAGE-START) (:end . MESSAGE-END))
+   ((:start . BLOCK-START) (:end . BLOCK-END)))"
   (when (< position (point-max))
     (delq nil
           (list
-           (when-let* (((get-text-property position 'agent-shell-ui-state))
-                       (range (save-excursion
-                                (goto-char position)
-                                (agent-shell-ui--block-range
-                                 :position position))))
-             (cons (map-elt range :start) (map-elt range :end)))
+           (when (get-text-property position 'agent-shell-ui-state)
+             ;; `agent-shell-ui--block-range' searches from point.
+             (save-excursion
+               (goto-char position)
+               (agent-shell-ui--block-range :position position)))
            (agent-shell--property-range
             position 'agent-shell-markdown-source-block-body)
            (agent-shell--property-range
@@ -5905,12 +5911,12 @@ For example, inside a source block in a message, returns
   "Return the nearest change of a block property from POSITION.
 DIRECTION is `forward' or `backward'."
   (if (eq direction 'forward)
-      (seq-min (mapcar (lambda (property)
-                         (next-single-char-property-change position property))
-                       agent-shell--block-properties))
-    (seq-max (mapcar (lambda (property)
-                       (previous-single-char-property-change position property))
-                     agent-shell--block-properties))))
+      (seq-min (seq-map (lambda (property)
+                          (next-single-char-property-change position property))
+                        agent-shell--block-properties))
+    (seq-max (seq-map (lambda (property)
+                        (previous-single-char-property-change position property))
+                      agent-shell--block-properties))))
 
 (defun agent-shell--previous-block-start (position)
   "Return the start of the block before POSITION, or nil.
@@ -5920,17 +5926,17 @@ blocks nest.  Otherwise it is the start of the last visible block
 ending before POSITION, the outermost one's, so a source block that
 closes a message yields the message."
   (if-let* ((enclosing (seq-filter (lambda (range)
-                                     (< (car range) position))
+                                     (< (map-elt range :start) position))
                                    (agent-shell--block-ranges-at position))))
-      (car (car (last enclosing)))
+      (map-elt (car (last enclosing)) :start)
     (let ((pos position)
           start)
       (while (and (not start) (> pos (point-min)))
         (if-let* ((outermost (car (agent-shell--block-ranges-at (1- pos)))))
-            (if (invisible-p (car outermost))
+            (if (invisible-p (map-elt outermost :start))
                 ;; In a collapsed group: carry on above it.
-                (setq pos (car outermost))
-              (setq start (car outermost)))
+                (setq pos (map-elt outermost :start))
+              (setq start (map-elt outermost :start)))
           (setq pos (agent-shell--block-boundary pos 'backward))))
       start)))
 
@@ -5944,15 +5950,15 @@ block holding them."
         start)
     (while (and (not start) (< pos (point-max)))
       (let ((later (seq-find (lambda (range)
-                               (> (car range) position))
+                               (> (map-elt range :start) position))
                              (agent-shell--block-ranges-at pos))))
         (cond
          ((null later)
           (setq pos (agent-shell--block-boundary pos 'forward)))
-         ((invisible-p (car later))
-          (setq pos (cdr later)))
+         ((invisible-p (map-elt later :start))
+          (setq pos (map-elt later :end)))
          (t
-          (setq start (car later))))))
+          (setq start (map-elt later :start))))))
     start))
 
 (defun agent-shell--beginning-of-block (&optional arg)
@@ -5964,11 +5970,14 @@ plan, submitted prompt, source block or table.  Return non-nil when
 point moved by all of ARG."
   (let ((block-start (if (< (or arg 1) 0)
                          #'agent-shell--next-block-start
-                       #'agent-shell--previous-block-start)))
-    (seq-every-p (lambda (_)
-                   (when-let* ((start (funcall block-start (point))))
-                     (goto-char start)))
-                 (number-sequence 1 (abs (or arg 1))))))
+                       #'agent-shell--previous-block-start))
+        (remaining (abs (or arg 1)))
+        start)
+    (while (and (> remaining 0)
+                (setq start (funcall block-start (point))))
+      (goto-char start)
+      (setq remaining (1- remaining)))
+    (zerop remaining)))
 
 (defun agent-shell--end-of-block ()
   "Move to the end of the block starting at point.
@@ -5976,10 +5985,10 @@ Failing that, to the end of the innermost block holding point.  Used
 as `end-of-defun-function'."
   (when-let* ((ranges (agent-shell--block-ranges-at (point)))
               (range (or (seq-find (lambda (range)
-                                     (= (car range) (point)))
+                                     (= (map-elt range :start) (point)))
                                    ranges)
                          (car (last ranges)))))
-    (goto-char (cdr range))))
+    (goto-char (map-elt range :end))))
 
 (cl-defun agent-shell-make-environment-variables (&rest vars &key inherit-env load-env &allow-other-keys)
   "Return VARS in the form expected by `process-environment'.
