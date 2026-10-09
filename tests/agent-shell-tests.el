@@ -147,6 +147,21 @@
     ;; Test empty string
     (should (equal (agent-shell--shorten-paths "") ""))))
 
+(ert-deftest agent-shell--make-missing-executable-error-test ()
+  "Test `agent-shell--make-missing-executable-error' function."
+  (let ((default-directory "/tmp/"))
+    (should (equal (agent-shell--make-missing-executable-error
+                    :executable "agent")
+                   "Executable \"agent\" not found.  Do you need (add-to-list 'exec-path \"another/path/to/consider/\")?"))
+    (should (equal (agent-shell--make-missing-executable-error
+                    :executable "agent"
+                    :install-instructions "See https://example.com")
+                   "Executable \"agent\" not found.  Do you need (add-to-list 'exec-path \"another/path/to/consider/\")?  See https://example.com")))
+  (let ((default-directory "/ssh:my-host:/project/"))
+    (should (equal (agent-shell--make-missing-executable-error
+                    :executable "agent")
+                   "Executable \"agent\" not found on my-host.  Do you need (add-to-list 'tramp-remote-path \"/remote/path/to/consider/\") followed by M-x tramp-cleanup-connection?"))))
+
 (ert-deftest agent-shell--format-plan-test ()
   "Test `agent-shell--format-plan' function."
   ;; Plan steps carry no kind, so the default label is the status icon

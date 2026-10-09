@@ -1476,6 +1476,32 @@ Could be the agent itself missing an [[https://agentclientprotocol.com][Agent Cl
 
 ** Is shx supported?
 No. There are reports that [[https://github.com/xenodium/agent-shell/issues/543][it does not work]] with agent-shell.
+** Agent hangs at "Loading..." or fails with "Method not found: initialize" over TRAMP?
+
+When =default-directory= is remote, the agent is started on the remote host via TRAMP. By default, TRAMP starts it through its own remote shell, which was reported to hang at "Loading..." in [[https://github.com/xenodium/agent-shell/issues/872][#872]]. Enabling TRAMP's direct asynchronous processes for the host (along with the =direct-async= setting below) resolved it:
+
+#+begin_src emacs-lisp
+  (connection-local-set-profile-variables
+   'remote-direct-async-process
+   '((tramp-direct-async-process . t)))
+
+  (connection-local-set-profiles
+   '(:application tramp :machine "my-host")
+   'remote-direct-async-process)
+#+end_src
+
+For the =ssh=, =scp=, and =rsync= methods, TRAMP runs direct asynchronous processes with =ssh -t -t=, which allocates a remote terminal. In #872, that terminal echoed =agent-shell='s requests back, failing with "Method not found: initialize". The following tells TRAMP to skip =-t -t= for the host:
+
+#+begin_src emacs-lisp
+  (add-to-list 'tramp-connection-properties
+               (list (regexp-quote "/ssh:my-host:") "direct-async" t))
+#+end_src
+
+Direct asynchronous processes don't support interactive authentication (e.g. password prompts), and TRAMP falls back to its default implementation for multi-hop connections. See TRAMP's "Improving performance of asynchronous remote processes" manual section for details.
+
+Agent executables are looked up on the remote host via =tramp-remote-path= (not =exec-path=). If yours isn't found, add its remote directory to =tramp-remote-path= and run =M-x tramp-cleanup-connection=, as TRAMP caches the remote path per connection.
+
+For mapping remote file paths between Emacs and the agent, see [[https://github.com/junyi-hou/agent-shell-tramp][agent-shell-tramp]].
 ** How do I view/get [[https://agentclientprotocol.com][Agent Client Protocol]] traffic?
 
 1. =M-x agent-shell-toggle-logging= (make sure logging is ON).

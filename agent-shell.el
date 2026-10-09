@@ -6683,9 +6683,20 @@ Return file path of the generated SVG."
     (format "#%02x%02x%02x" r g b)))
 
 (cl-defun agent-shell--make-missing-executable-error (&key executable install-instructions)
-  "Create error message for missing EXECUTABLE.
-INSTALL-INSTRUCTIONS is optional installation guidance."
-  (concat (format "Executable \"%s\" not found.  Do you need (add-to-list 'exec-path \"another/path/to/consider/\")?" executable)
+  "Return error message for missing EXECUTABLE.
+
+INSTALL-INSTRUCTIONS is optional installation guidance.
+
+When `default-directory' is remote, suggest `tramp-remote-path'
+instead of `exec-path'.  For example, with `default-directory'
+set to \"/ssh:host:/project/\" and EXECUTABLE \"agent\":
+
+  Executable \"agent\" not found on host.  Do you need
+  (add-to-list \\='tramp-remote-path \"/remote/path/to/consider/\")
+  followed by M-x tramp-cleanup-connection?"
+  (concat (if-let* ((host (file-remote-p default-directory 'host)))
+              (format "Executable \"%s\" not found on %s.  Do you need (add-to-list 'tramp-remote-path \"/remote/path/to/consider/\") followed by M-x tramp-cleanup-connection?" executable host)
+            (format "Executable \"%s\" not found.  Do you need (add-to-list 'exec-path \"another/path/to/consider/\")?" executable))
           (when install-instructions
             (concat "  " install-instructions))))
 
