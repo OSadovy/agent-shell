@@ -896,14 +896,20 @@ happened to share the id could not be mistaken for one."
   "Return (:start :end) of the group header GROUP-QUALIFIED-ID, or nil.
 
 Answered from `agent-shell-ui--block-cache' where possible, and the
-result of a search is recorded there.  The search starts at `point-min',
-so it costs whatever sits above the group, and a collapsed group looks
-its header up several times per child update: without the cache a
-turn's cost grew with everything already in the buffer (issue #757)."
+result of a search is recorded there.  A collapsed group looks its
+header up several times per child update, so without the cache a turn's
+cost grew with everything already in the buffer (issue #757).
+
+The cache holds the last few blocks updated, and a group's own children
+push its header out, so the search still runs often.  It starts at
+`point-max', since the group being updated is nearly always the latest,
+and is skipped for a header never inserted, which every new group asks
+about first."
   (or (agent-shell-ui--cached-group-header group-qualified-id)
-      (when-let* ((match (save-mark-and-excursion
-                           (goto-char (point-min))
-                           (text-property-search-forward
+      (when-let* (((not (agent-shell-ui--block-absent-p group-qualified-id)))
+                  (match (save-mark-and-excursion
+                           (goto-char (point-max))
+                           (text-property-search-backward
                             'agent-shell-ui-state nil
                             (lambda (_ state)
                               (and (equal (map-elt state :qualified-id)
