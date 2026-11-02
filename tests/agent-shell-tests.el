@@ -10247,6 +10247,21 @@ at or after point, which puts diagnostics from other lines at point."
       (should (equal (agent-shell-cwd) "/tmp/"))
       (setq default-directory "/")
       (should (equal (agent-shell-cwd) "/")))))
+(ert-deftest agent-shell-cache-dir-creates-missing-directory-test ()
+  "The cache directory is created when missing, including after deletion."
+  (let* ((base (make-temp-file "agent-shell-cache-test-" t))
+         (process-environment (cons (concat "XDG_CACHE_HOME=" base)
+                                    process-environment))
+         (expected (file-name-concat base "agent-shell" "content")))
+    (unwind-protect
+        (progn
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (should (file-directory-p expected))
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (delete-directory expected)
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (should (file-directory-p expected)))
+      (delete-directory base t))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
