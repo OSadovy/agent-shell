@@ -1307,6 +1307,7 @@ OUTGOING-REQUEST-DECORATOR (passed through to `acp-make-client')."
         (cons :chunked-group-count 0)
         (cons :activity-group-count 0)
         (cons :activity-thoughts nil)
+        (cons :activity-group-members (make-hash-table :test #'equal))
         (cons :expanded-activity-group nil)
         (cons :request-count 0)
         (cons :last-activity-time nil)
@@ -2982,6 +2983,8 @@ group.  The run counter is shared with thoughts via
   (or (map-nested-elt state `(:tool-calls ,tool-call-id :group-id))
       (let ((group-id (agent-shell--activity-group-current-id state)))
         (agent-shell--save-tool-call state tool-call-id (list (cons :group-id group-id)))
+        (when-let* ((members (map-elt state :activity-group-members)))
+          (push tool-call-id (gethash group-id members)))
         group-id)))
 
 (defconst agent-shell--tool-call-status-precedence
@@ -2998,10 +3001,9 @@ otherwise the worst present status surfaces (one failure shows `failed').")
                       (\"t2\" . ((:group-id . \"g\") (:status . \"failed\"))))))
    \"g\")
   ;; => (\"completed\" \"failed\")"
-  (seq-keep (lambda (pair)
-              (when (equal (map-elt (cdr pair) :group-id) group-id)
-                (map-elt (cdr pair) :status)))
-            (map-elt state :tool-calls)))
+  (nreverse
+   (seq-keep (lambda (pair) (map-elt (cdr pair) :status))
+             (agent-shell--group-tool-calls :state state :group-id group-id))))
 
 (defun agent-shell--activity-group-status-glyph (status)
   "Return a propertized status icon for a group header, or nil for no STATUS."
@@ -3038,12 +3040,30 @@ counts toward the total but not the numerator.
   "Return (ID . TOOL-CALL) pairs in STATE assigned to GROUP-ID, in call order.
 
 STATE's `:tool-calls' alist stores the most recent call first, so the
-result is reversed to reflect the order the calls were made."
-  (nreverse
-   (seq-keep (lambda (pair)
-               (when (equal (map-elt (cdr pair) :group-id) group-id)
-                 pair))
-             (map-elt state :tool-calls))))
+result is reversed to reflect the order the calls were made.
+
+With STATE's `:activity-group-members', the walk stops once every call
+recorded for GROUP-ID is found.  A group's calls are recent, and the
+header is relabelled on every tool call update, so a full walk made each
+update cost every tool call of the turn; a session replay, which never
+ends a turn, holds thousands."
+  (if-let* ((members (map-elt state :activity-group-members)))
+      (let ((remaining (copy-sequence (gethash group-id members)))
+            found)
+        (when remaining
+          (catch 'done
+            (dolist (pair (map-elt state :tool-calls))
+              (when (member (car pair) remaining)
+                (when (equal (map-elt (cdr pair) :group-id) group-id)
+                  (push pair found))
+                (unless (setq remaining (delete (car pair) remaining))
+                  (throw 'done nil))))))
+        found)
+    (nreverse
+     (seq-keep (lambda (pair)
+                 (when (equal (map-elt (cdr pair) :group-id) group-id)
+                   pair))
+               (map-elt state :tool-calls)))))
 
 (defun agent-shell--count-group-thought (state group-id)
   "Record one more thought for the activity group GROUP-ID in STATE.
