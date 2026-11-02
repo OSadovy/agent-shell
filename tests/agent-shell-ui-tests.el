@@ -124,6 +124,32 @@ The viewport fills its buffer this way and does not track block ids."
       (should (= 0 (agent-shell-ui-tests--count "one")))
       (should (= 1 (agent-shell-ui-tests--count "two"))))))
 
+(ert-deftest agent-shell-ui-group-header-found-after-cache-eviction-test ()
+  "A late child joins its group after the group's header left the block cache.
+Twelve children evict the header from the cache, and a second group
+follows, so the late child's group is no longer the last one."
+  (dolist (tracked '(nil t))
+    (with-temp-buffer
+      (when tracked
+        (agent-shell-ui-track-block-ids))
+      (dolist (n (number-sequence 1 12))
+        (agent-shell-ui-update-fragment
+         (agent-shell-ui-make-fragment-model
+          :block-id (format "c%d" n) :body (format "child %d" n)
+          :group-id "g" :group-label "GROUP-G")))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :block-id "x" :body "other" :group-id "h" :group-label "GROUP-H"))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model
+        :block-id "c13" :body "child 13" :group-id "g" :group-label "GROUP-G"))
+      (should (= 1 (agent-shell-ui-tests--count "GROUP-G")))
+      (should (= 1 (agent-shell-ui-tests--count "GROUP-H")))
+      (should (member "global-c13"
+                      (mapcar (lambda (child) (map-elt child :qualified-id))
+                              (agent-shell-ui--group-children
+                               :group-qualified-id "global-g")))))))
+
 (ert-deftest agent-shell-ui-body-invisible-p-handles-whitespace-only-body ()
   ;; Regression for PR #597 (pi-acp): the markdown renderer strips
   ;; an empty `\\`\\`\\`console' fence down to a body of only
