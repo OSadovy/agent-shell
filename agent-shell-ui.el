@@ -202,7 +202,8 @@ O(accumulated-body).  Label-only updates leave the body untouched."
                  ;; it still describes the buffer.
                  (cached (unless create-new
                            (agent-shell-ui--cached-block qualified-id)))
-                 (match (unless (or cached create-new)
+                 (match (unless (or cached create-new
+                                    (agent-shell-ui--block-absent-p qualified-id))
                           (save-mark-and-excursion
                             (goto-char (point-max))
                             (text-property-search-backward
@@ -667,13 +668,14 @@ When NO-UNDO is non-nil, disable undo recording for this operation."
     (let* ((inhibit-read-only t)
            (buffer-undo-list (if no-undo t buffer-undo-list))
            (qualified-id (format "%s-%s" namespace-id block-id))
-           (match (save-mark-and-excursion
-                    (goto-char (point-max))
-                    (text-property-search-backward
-                     'agent-shell-ui-state nil
-                     (lambda (_ state)
-                       (equal (map-elt state :qualified-id) qualified-id))
-                     t))))
+           (match (unless (agent-shell-ui--block-absent-p qualified-id)
+                    (save-mark-and-excursion
+                      (goto-char (point-max))
+                      (text-property-search-backward
+                       'agent-shell-ui-state nil
+                       (lambda (_ state)
+                         (equal (map-elt state :qualified-id) qualified-id))
+                       t)))))
       (when match
         (let ((block-start (prop-match-beginning match))
               (block-end (prop-match-end match)))
@@ -722,6 +724,45 @@ is nothing to keep in step between them.
 Only the last few blocks are kept.  Streaming revisits a handful at a
 time, and every live marker costs a little on each insertion, so this
 must not grow with the session.")
+
+(defvar-local agent-shell-ui--block-ids nil
+  "Qualified-ids of every block this buffer has held, or nil when untracked.
+
+A hash table with each id as a key, filled by
+`agent-shell-ui-track-block-ids' and by the functions that insert
+blocks.  Ids stay after their block is deleted, so an id missing from
+the table means the block is not in the buffer, while one present
+still has to be looked for.
+
+Looking up a block that is not there walks the whole buffer, and a
+session replay asks about thousands of them: each tool call's first
+update and its permission dialog, which a replay never shows.  The
+table answers those outright.  It is only kept where every block
+arrives through this file; a viewport re-inserts copied text and
+leaves it nil, which means search as before.")
+
+(defun agent-shell-ui-track-block-ids ()
+  "Start recording the blocks inserted in this buffer.
+Every block insertion from here on must go through this file.  Blocks
+already in the buffer are recorded first."
+  (setq agent-shell-ui--block-ids (make-hash-table :test #'equal))
+  (let ((pos (point-min)))
+    (while (< pos (point-max))
+      (when-let* ((id (map-elt (get-text-property pos 'agent-shell-ui-state)
+                               :qualified-id)))
+        (puthash id t agent-shell-ui--block-ids))
+      (setq pos (next-single-property-change pos 'agent-shell-ui-state
+                                             nil (point-max))))))
+
+(defun agent-shell-ui--note-block-id (qualified-id)
+  "Record that QUALIFIED-ID's block was inserted, if blocks are tracked."
+  (when agent-shell-ui--block-ids
+    (puthash qualified-id t agent-shell-ui--block-ids)))
+
+(defun agent-shell-ui--block-absent-p (qualified-id)
+  "Return non-nil when QUALIFIED-ID's block is known not to be here."
+  (and agent-shell-ui--block-ids
+       (not (gethash qualified-id agent-shell-ui--block-ids))))
 
 (defun agent-shell-ui--block-id-at (position qualified-id)
   "Return non-nil when POSITION holds a char of QUALIFIED-ID's block."
@@ -1231,7 +1272,8 @@ indents a child's header line under its group header."
                                                  ;; Default to auto
                                                  (and body indicator-start))))))
     (put-text-property block-start (or body-end label-right-end label-left-end) 'read-only t)
-    (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))))
+    (put-text-property block-start (or body-end label-right-end label-left-end) 'front-sticky '(read-only))
+    (agent-shell-ui--note-block-id qualified-id)))
 
 (cl-defun agent-shell-ui-update-text (&key namespace-id block-id text append create-new no-undo)
   "Update or insert a plain text entry identified by NAMESPACE-ID and BLOCK-ID.
@@ -1247,7 +1289,8 @@ When NO-UNDO is non-nil, disable undo recording."
            (props `(agent-shell-ui-state ((:qualified-id . ,qualified-id))
                                          read-only t
                                          front-sticky (read-only)))
-           (match (unless create-new
+           (match (unless (or create-new
+                              (agent-shell-ui--block-absent-p qualified-id))
                     (save-mark-and-excursion
                       (goto-char (point-max))
                       (text-property-search-backward
@@ -1285,6 +1328,7 @@ When NO-UNDO is non-nil, disable undo recording."
             (agent-shell-ui--insert-read-only (agent-shell-ui--required-newlines 2))
             (let ((block-start (point)))
               (insert (apply #'propertize text props))
+              (agent-shell-ui--note-block-id qualified-id)
               (list (cons :block (list (cons :start block-start)
                                        (cons :end (point))))
                     (cons :padding (list (cons :start padding-start)
