@@ -10238,6 +10238,15 @@ at or after point, which puts diagnostics from other lines at point."
                    '("t1" "t2")))
     (should (equal (agent-shell--group-tool-statuses state "activity-1")
                    '("failed" "completed")))))
+(ert-deftest agent-shell-cwd-follows-shell-default-directory-test ()
+  "A shell reports its own `default-directory', expanded, as it changes."
+  (with-temp-buffer
+    (let ((agent-shell--state (list (cons :buffer (current-buffer)))))
+      (setq default-directory "/tmp/agent-shell-cwd-test/../")
+      (should (equal (agent-shell-cwd) "/tmp/"))
+      (should (equal (agent-shell-cwd) "/tmp/"))
+      (setq default-directory "/")
+      (should (equal (agent-shell-cwd) "/")))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
