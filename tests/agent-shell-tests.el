@@ -10195,5 +10195,15 @@ at or after point, which puts diagnostics from other lines at point."
                  (lambda (&optional _beg _end) (list diagnostic))))
         (should-not (agent-shell--get-flymake-error-context))))))
 
+(ert-deftest agent-shell-cwd-follows-shell-default-directory-test ()
+  "A shell reports its own `default-directory', expanded, as it changes."
+  (with-temp-buffer
+    (let ((agent-shell--state (list (cons :buffer (current-buffer)))))
+      (setq default-directory "/tmp/agent-shell-cwd-test/../")
+      (should (equal (agent-shell-cwd) "/tmp/"))
+      (should (equal (agent-shell-cwd) "/tmp/"))
+      (setq default-directory "/")
+      (should (equal (agent-shell-cwd) "/")))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here

@@ -68,17 +68,31 @@ When nil (the default), `agent-shell-cwd' uses project root detection."
                  (function :tag "Custom function"))
   :group 'agent-shell)
 
+(defvar-local agent-shell--expanded-cwd nil
+  "This shell's `default-directory' and its expansion, as a cons.
+Expanding a remote directory parses its Tramp name, and tool call labels
+and path shortening ask for the directory thousands of times in a
+session replay.")
+
 (defun agent-shell-cwd ()
   "Return the working directory for the current shell, or for a new one.
 
 Within a shell, return the directory it started in.  Elsewhere, return
 the directory a new shell would start in: `agent-shell-cwd-function'
 if set, else the project root, else `default-directory'."
+  (if (and (bound-and-true-p agent-shell--state)
+           (eq (map-elt agent-shell--state :buffer) (current-buffer)))
+      (if (eq (car agent-shell--expanded-cwd) default-directory)
+          (cdr agent-shell--expanded-cwd)
+        (cdr (setq agent-shell--expanded-cwd
+                   (cons default-directory
+                         (expand-file-name default-directory)))))
+    (agent-shell--new-shell-cwd)))
+
+(defun agent-shell--new-shell-cwd ()
+  "Return the directory a new shell would start in."
   (expand-file-name
-   (or (when (and (bound-and-true-p agent-shell--state)
-                  (eq (map-elt agent-shell--state :buffer) (current-buffer)))
-         default-directory)
-       (when agent-shell-cwd-function
+   (or (when agent-shell-cwd-function
          (funcall agent-shell-cwd-function))
        (when (and (boundp 'projectile-mode)
                   projectile-mode
