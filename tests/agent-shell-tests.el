@@ -10212,6 +10212,32 @@ at or after point, which puts diagnostics from other lines at point."
     (should (equal (map-nested-elt state '(:tool-calls "t1" :title)) "a"))
     (should (equal (map-nested-elt state '(:tool-calls "t1" :status)) "completed"))
     (should (equal (map-nested-elt state '(:tool-calls "t2" :title)) "b"))))
+(ert-deftest agent-shell--group-tool-calls-index-matches-scan-test ()
+  "Group members found through the index match a scan of every tool call."
+  (let ((state (list (cons :tool-calls nil)
+                     (cons :activity-group-count 0)
+                     (cons :last-entry-type nil)
+                     (cons :activity-group-members
+                           (make-hash-table :test #'equal)))))
+    (dolist (id '("t1" "t2"))
+      (agent-shell--activity-group-id state id)
+      (map-put! state :last-entry-type "tool_call"))
+    (map-put! state :last-entry-type "agent_message_chunk")
+    (agent-shell--activity-group-id state "t3")
+    (agent-shell--save-tool-call state "t1" '((:status . "completed")))
+    (agent-shell--save-tool-call state "t2" '((:status . "failed")))
+    (agent-shell--save-tool-call state "t3" '((:status . "pending")))
+    (let ((scanned (map-delete (copy-alist state) :activity-group-members)))
+      (dolist (group '("activity-1" "activity-2" "activity-9"))
+        (should (equal (agent-shell--group-tool-calls :state state :group-id group)
+                       (agent-shell--group-tool-calls :state scanned :group-id group)))
+        (should (equal (agent-shell--group-tool-statuses state group)
+                       (agent-shell--group-tool-statuses scanned group)))))
+    (should (equal (mapcar #'car (agent-shell--group-tool-calls
+                                  :state state :group-id "activity-1"))
+                   '("t1" "t2")))
+    (should (equal (agent-shell--group-tool-statuses state "activity-1")
+                   '("failed" "completed")))))
 
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
