@@ -5262,6 +5262,9 @@ variable (see makunbound)"))
       ;; Initialize buffer-local shell-maker-config
       (setq-local agent-shell--shell-maker-config shell-maker-config)
       (setq-local filter-buffer-substring-function #'agent-shell--filter-buffer-substring)
+      ;; Copying strips block properties (above), so blocks only ever
+      ;; arrive here through agent-shell-ui.
+      (agent-shell-ui-track-block-ids)
       (setq-local beginning-of-defun-function #'agent-shell--beginning-of-block)
       (setq-local end-of-defun-function #'agent-shell--end-of-block)
       (agent-shell--update-header-and-mode-line)

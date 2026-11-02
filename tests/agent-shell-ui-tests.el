@@ -49,6 +49,81 @@ pays for it on each insertion (see PR #897)."
     (should (string-match-p "second" (buffer-string)))
     (should (string-match-p "third" (buffer-string)))))
 
+(defun agent-shell-ui-tests--count (text)
+  "Return how many times TEXT occurs in the current buffer."
+  (how-many (regexp-quote text) (point-min) (point-max)))
+
+(ert-deftest agent-shell-ui-tracked-absent-block-skips-search-test ()
+  "With block ids tracked, a block never inserted is not searched for.
+A replay updates each tool call before its block exists and deletes a
+permission dialog it never showed, and each search walks the buffer."
+  (with-temp-buffer
+    (agent-shell-ui-track-block-ids)
+    (agent-shell-ui-update-text :block-id "before" :text "earlier")
+    (cl-letf* ((search (symbol-function 'text-property-search-backward))
+               ((symbol-function 'text-property-search-backward)
+                (lambda (property &optional value predicate not-current)
+                  (when (and (eq property 'agent-shell-ui-state)
+                             (not value)
+                             (functionp predicate))
+                    (error "Unexpected search for an absent entry"))
+                  (funcall search property value predicate not-current))))
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model :block-id "tool" :body "output"))
+      (agent-shell-ui-update-text :block-id "note" :text "said")
+      (agent-shell-ui-delete-fragment :namespace-id "global" :block-id "permission-tool"))
+    (should (= 1 (agent-shell-ui-tests--count "earlier")))
+    (should (= 1 (agent-shell-ui-tests--count "output")))
+    (should (= 1 (agent-shell-ui-tests--count "said")))))
+
+(ert-deftest agent-shell-ui-tracked-block-updates-in-place-test ()
+  "A tracked block is found again, including after deletion and re-creation."
+  (with-temp-buffer
+    (agent-shell-ui-track-block-ids)
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "one"))
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "two"))
+    (should (= 0 (agent-shell-ui-tests--count "one")))
+    (should (= 1 (agent-shell-ui-tests--count "two")))
+    (agent-shell-ui-delete-fragment :namespace-id "global" :block-id "a")
+    (should (= 0 (agent-shell-ui-tests--count "two")))
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "three"))
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "four"))
+    (should (= 0 (agent-shell-ui-tests--count "three")))
+    (should (= 1 (agent-shell-ui-tests--count "four")))))
+
+(ert-deftest agent-shell-ui-track-records-existing-blocks-test ()
+  "Blocks inserted before tracking starts are still updated in place."
+  (with-temp-buffer
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "one"))
+    (agent-shell-ui-update-text :block-id "b" :text "first")
+    (agent-shell-ui-track-block-ids)
+    (agent-shell-ui-update-fragment
+     (agent-shell-ui-make-fragment-model :block-id "a" :body "two"))
+    (agent-shell-ui-update-text :block-id "b" :text "second")
+    (should (= 0 (agent-shell-ui-tests--count "one")))
+    (should (= 1 (agent-shell-ui-tests--count "two")))
+    (should (= 0 (agent-shell-ui-tests--count "first")))
+    (should (= 1 (agent-shell-ui-tests--count "second")))))
+
+(ert-deftest agent-shell-ui-untracked-buffer-finds-copied-blocks-test ()
+  "Without tracking, a block that arrived as copied text is still found.
+The viewport fills its buffer this way and does not track block ids."
+  (let ((copied (with-temp-buffer
+                  (agent-shell-ui-update-fragment
+                   (agent-shell-ui-make-fragment-model :block-id "a" :body "one"))
+                  (buffer-string))))
+    (with-temp-buffer
+      (insert copied)
+      (agent-shell-ui-update-fragment
+       (agent-shell-ui-make-fragment-model :block-id "a" :body "two"))
+      (should (= 0 (agent-shell-ui-tests--count "one")))
+      (should (= 1 (agent-shell-ui-tests--count "two"))))))
+
 (ert-deftest agent-shell-ui-body-invisible-p-handles-whitespace-only-body ()
   ;; Regression for PR #597 (pi-acp): the markdown renderer strips
   ;; an empty `\\`\\`\\`console' fence down to a body of only
