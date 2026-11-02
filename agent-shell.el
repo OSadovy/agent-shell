@@ -4577,18 +4577,18 @@ DIFFS is a list of diff infos as returned by
                                    :success t)))))
 
 (defun agent-shell--save-tool-call (state tool-call-id tool-call)
-  "Store TOOL-CALL with TOOL-CALL-ID in STATE's :tool-calls alist."
-  (let* ((tool-calls (map-elt state :tool-calls))
-         (old-tool-call (map-elt tool-calls tool-call-id))
-         (updated-tools (copy-alist tool-calls))
-         (tool-call-overrides (seq-filter (lambda (pair)
-                                            (cdr pair))
-                                          tool-call)))
-    (setf (map-elt updated-tools tool-call-id)
-          (if old-tool-call
-              (map-merge 'alist old-tool-call tool-call-overrides)
-            tool-call-overrides))
-    (map-put! state :tool-calls updated-tools)))
+  "Store TOOL-CALL with TOOL-CALL-ID in STATE's :tool-calls alist.
+An existing entry is updated in place and a new one is pushed on the
+front.  Copying the alist instead made every save cost a pass over all
+of the turn's tool calls, and a session replay, which never ends a turn,
+saves thousands of them."
+  (let ((entry (assoc tool-call-id (map-elt state :tool-calls)))
+        (tool-call-overrides (seq-filter #'cdr tool-call)))
+    (if entry
+        (setcdr entry (map-merge 'alist (cdr entry) tool-call-overrides))
+      (map-put! state :tool-calls
+                (cons (cons tool-call-id tool-call-overrides)
+                      (map-elt state :tool-calls))))))
 
 (cl-defun agent-shell--make-boxed-message (&key text width)
   "Return TEXT framed in a rounded Unicode box.

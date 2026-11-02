@@ -10195,5 +10195,16 @@ at or after point, which puts diagnostics from other lines at point."
                  (lambda (&optional _beg _end) (list diagnostic))))
         (should-not (agent-shell--get-flymake-error-context))))))
 
+(ert-deftest agent-shell--save-tool-call-merges-test ()
+  "New tool calls go first, and updates merge without erasing on nil."
+  (let ((state (list (cons :tool-calls nil))))
+    (agent-shell--save-tool-call state "t1" '((:title . "a") (:status . "pending")))
+    (agent-shell--save-tool-call state "t2" '((:title . "b")))
+    (agent-shell--save-tool-call state "t1" '((:status . "completed") (:title . nil)))
+    (should (equal (mapcar #'car (map-elt state :tool-calls)) '("t2" "t1")))
+    (should (equal (map-nested-elt state '(:tool-calls "t1" :title)) "a"))
+    (should (equal (map-nested-elt state '(:tool-calls "t1" :status)) "completed"))
+    (should (equal (map-nested-elt state '(:tool-calls "t2" :title)) "b"))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
