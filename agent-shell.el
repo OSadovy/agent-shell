@@ -4155,7 +4155,11 @@ path of the resulting directory."
                      (_ (expand-file-name ".cache" "~")))
                    (expand-file-name "cache" user-emacs-directory)))
          (cache-dir (apply #'file-name-concat base "agent-shell" components)))
-    (make-directory cache-dir t)
+    ;; Markdown rendering asks for the image cache on every pass.
+    ;; `make-directory' on an existing directory costs far more than the
+    ;; check, and signals and catches `file-already-exists' to get there.
+    (unless (file-directory-p cache-dir)
+      (make-directory cache-dir t))
     cache-dir))
 
 (defun agent-shell--stop-reason-description (stop-reason)

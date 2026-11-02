@@ -10195,5 +10195,21 @@ at or after point, which puts diagnostics from other lines at point."
                  (lambda (&optional _beg _end) (list diagnostic))))
         (should-not (agent-shell--get-flymake-error-context))))))
 
+(ert-deftest agent-shell-cache-dir-creates-missing-directory-test ()
+  "The cache directory is created when missing, including after deletion."
+  (let* ((base (make-temp-file "agent-shell-cache-test-" t))
+         (process-environment (cons (concat "XDG_CACHE_HOME=" base)
+                                    process-environment))
+         (expected (file-name-concat base "agent-shell" "content")))
+    (unwind-protect
+        (progn
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (should (file-directory-p expected))
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (delete-directory expected)
+          (should (equal (agent-shell-cache-dir "content") expected))
+          (should (file-directory-p expected)))
+      (delete-directory base t))))
+
 (provide 'agent-shell-tests)
 ;;; agent-shell-tests.el ends here
